@@ -1,0 +1,15 @@
+{
+  "name": "standalone-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "start:detached": "./start.sh",
+    "stop": "./stop.sh",
+    "check": "node --check server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

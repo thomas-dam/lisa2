@@ -1,0 +1,5 @@
+node_modules/
+.server.pid
+server.log
+*.log
+.DS_Store

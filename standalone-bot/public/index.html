@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Standalone Bot</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="sidebar" aria-label="Conversation controls">
+        <div>
+          <p class="eyebrow">Local assistant</p>
+          <h1>Standalone Bot</h1>
+        </div>
+        <label class="field">
+          <span>Model</span>
+          <input id="modelInput" name="model" value="" autocomplete="off" />
+        </label>
+        <button id="newChatButton" class="secondary-button" type="button">New chat</button>
+        <p id="statusText" class="status" role="status">Ready</p>
+      </aside>
+
+      <section class="chat-panel" aria-label="Chat">
+        <div id="messages" class="messages">
+          <article class="message assistant">
+            <div class="avatar" aria-hidden="true">AI</div>
+            <div class="bubble">Send a message to start a local conversation.</div>
+          </article>
+        </div>
+
+        <form id="chatForm" class="composer">
+          <textarea
+            id="messageInput"
+            name="message"
+            rows="1"
+            autocomplete="off"
+            placeholder="Message the bot"
+            required
+          ></textarea>
+          <button id="sendButton" type="submit">Send</button>
+        </form>
+      </section>
+    </main>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

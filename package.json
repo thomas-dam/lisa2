@@ -1,0 +1,11 @@
+{
+  "name": "lisa2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "npm --prefix standalone-bot start",
+    "check": "npm --prefix standalone-bot run check",
+    "start:detached": "npm --prefix standalone-bot run start:detached",
+    "stop": "npm --prefix standalone-bot run stop"
+  }
+}
