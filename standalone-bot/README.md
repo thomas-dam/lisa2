@@ -19,9 +19,19 @@ npm start
 
 Open `http://127.0.0.1:3320`.
 
-By default the server calls Ollama at `http://127.0.0.1:11434` with model `qwen3:4b`.
+By default the server calls Ollama at `http://127.0.0.1:11434` with model `Lisa-The-Bot:latest` — a custom Modelfile personality built on `hf.co/llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-GGUF:Q4_K_S` with vision capabilities.
 
 Stop it with `Ctrl-C` in the terminal that launched it.
+
+## HTTPS Access
+
+While the bot is running, expose it on the tailnet with:
+
+```sh
+npm run serve:https
+```
+
+That maps `https://farm.typhon-kelvin.ts.net:3320/` to the local bot.
 
 ## Optional Background Mode
 
@@ -36,7 +46,25 @@ The background helper writes `server.log` and `.server.pid`, but the normal work
 ## Configuration
 
 ```sh
-PORT=3320 OLLAMA_URL=http://127.0.0.1:11434 OLLAMA_MODEL=qwen3:4b npm start
+PORT=3320 OLLAMA_URL=http://127.0.0.1:11434 OLLAMA_MODEL=Lisa-The-Bot:latest npm start
 ```
 
-You can also change the model from the app sidebar before sending a message.
+You can also change the model from the app sidebar dropdown (populated from your installed Ollama models) before sending a message.
+
+The persona is defined entirely by the `Lisa-The-Bot` Modelfile. The server sends no system message by default; set `SYSTEM_PROMPT` only if you deliberately want to override the Modelfile.
+
+## Web search
+
+A "Search web" button runs the query, injects the results as ephemeral context into the message sent to Lisa, and discards them (they never enter chat history). Without a key it uses DuckDuckGo instant answers; for better results set an Exa key:
+
+```sh
+EXA_API_KEY=your_key npm start
+```
+
+## Tests
+
+```sh
+npm test
+```
+
+Runs the message-assembly acceptance test (no Ollama needed). See `lisa-chat.js` for the persistent/ephemeral split: retrieved reference text is injected per call and never stored in conversation history.

@@ -7,7 +7,10 @@
     "start": "node server.js",
     "start:detached": "./start.sh",
     "stop": "./stop.sh",
-    "check": "node --check server.js"
+    "serve:https": "tailscale serve --bg --yes --https=3320 3320",
+    "serve:off": "tailscale serve --yes --https=3320 off",
+    "check": "node --check server.js",
+    "test": "node test-assembly.js"
   },
   "engines": {
     "node": ">=18"

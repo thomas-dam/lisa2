@@ -5,7 +5,10 @@
   "scripts": {
     "start": "npm --prefix standalone-bot start",
     "check": "npm --prefix standalone-bot run check",
+    "test": "npm --prefix standalone-bot test",
     "start:detached": "npm --prefix standalone-bot run start:detached",
-    "stop": "npm --prefix standalone-bot run stop"
+    "stop": "npm --prefix standalone-bot run stop",
+    "serve:https": "npm --prefix standalone-bot run serve:https",
+    "serve:off": "npm --prefix standalone-bot run serve:off"
   }
 }
