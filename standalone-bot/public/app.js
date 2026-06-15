@@ -28,6 +28,17 @@ let audioChunks = [];
 let sidecarUrl = "";
 let voiceEnabled = false;
 let speakResponses = true;
+let audioCtx = null;
+
+function ensureAudioCtx() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx.state === "suspended") {
+    void audioCtx.resume();
+  }
+  return audioCtx;
+}
 
 function debugLog(label, value) {
   const el = { recording: debugRecording, transcript: debugTranscript, asr: debugAsr, chat: debugChat, tts: debugTts, audio_url: debugAudioUrl }[label];
@@ -359,8 +370,25 @@ async function sendMessage(content, fromVoice) {
     clearAttachments();
     console.debug(`[DIAG-REQ] ${reqId} OK reply_len=${reply.length}`);
 
-    if (speakResponses) {
-      await callTts(reply);
+    // --- Voice gate ---
+    const voiceVars = {
+      speakResponses,
+      fromVoice: typeof fromVoice !== "undefined",
+      sidecarUrl,
+      voiceEnabled,
+      replyPreview: reply.slice(0, 80),
+      replyLength: reply.length,
+    };
+    console.debug(`[VOICE] gate decision:`, voiceVars);
+
+    if (speakResponses && sidecarUrl) {
+      console.debug(`[VOICE] calling TTS for req ${reqId}`, {
+        replyPreview: reply.slice(0, 120),
+        replyLength: reply.length,
+      });
+      await callTts(reply, reqId);
+    } else {
+      console.debug(`[VOICE] skipped: speakResponses=${speakResponses} sidecarUrl="${sidecarUrl}"`);
     }
   } catch (error) {
     console.error(`[DIAG-REQ] ${reqId} FAIL`, { error: error.message });
@@ -501,31 +529,133 @@ async function handleVoiceInput(audioBlob) {
   }
 }
 
-async function callTts(text) {
-  if (!sidecarUrl || !speakResponses) return;
+async function callTts(text, reqId) {
+  console.debug(`[VOICE] callTts entered: sidecarUrl="${sidecarUrl}" speakResponses=${speakResponses} text_len=${text.length} req=${reqId}`);
+  if (!speakResponses) {
+    console.warn(`[VOICE] callTts aborted: speakResponses=${speakResponses}`);
+    return;
+  }
   const ttsStart = performance.now();
+  const ttsReqId = reqId || `tts_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
   try {
-    const formData = new FormData();
-    formData.append("text", text);
-    const ttsRes = await fetch(`${sidecarUrl}/api/tts`, {
-      method: "POST",
-      body: formData,
+    // --- Stage 1: Build and send TTS request via same-origin proxy ---
+    const ttsBody = JSON.stringify({
+      text,
+      voice: "F1",
+      language: "en",
     });
+    console.debug(`[VOICE] TTS request:`, {
+      reqId: ttsReqId,
+      url: "/api/voice/tts",
+      method: "POST",
+      contentType: "application/json",
+      bodyPreview: ttsBody.slice(0, 200),
+      bodyLength: ttsBody.length,
+      textLength: text.length,
+    });
+
+    const ttsRes = await fetch("/api/voice/tts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: ttsBody,
+    });
+
+    // --- Stage 2: Handle TTS response ---
+    const ttsStatus = ttsRes.status;
+    const ttsStatusText = ttsRes.statusText;
+    const ttsHeaders = Object.fromEntries([...ttsRes.headers.entries()]);
+    const ttsBodyText = await ttsRes.text();
+    const ttsElapsed = ((performance.now() - ttsStart) / 1000).toFixed(3);
+
+    console.debug(`[VOICE] TTS response:`, {
+      reqId: ttsReqId,
+      status: ttsStatus,
+      statusText: ttsStatusText,
+      headers: ttsHeaders,
+      bodyPreview: ttsBodyText.slice(0, 300),
+      bodyLength: ttsBodyText.length,
+      elapsedSec: ttsElapsed,
+    });
+
     if (!ttsRes.ok) {
-      const errData = await ttsRes.text();
-      console.warn("TTS failed:", errData);
+      console.warn(`[VOICE] TTS request failed: status=${ttsStatus} body=${ttsBodyText.slice(0, 300)} elapsed=${ttsElapsed}s`);
       return;
     }
-    const ttsData = await ttsRes.json();
-    const ttsTime = ((performance.now() - ttsStart) / 1000).toFixed(2);
-    debugLog("tts", `${ttsTime}s`);
-    debugLog("audio_url", ttsData.audio_url);
 
-    const audioUrl = `${sidecarUrl}${ttsData.audio_url}`;
-    const audio = new Audio(audioUrl);
-    audio.play().catch((err) => console.warn("Audio playback failed:", err));
+    // --- Stage 3: Parse response and build audio URL ---
+    let ttsData;
+    try {
+      ttsData = JSON.parse(ttsBodyText);
+    } catch (parseErr) {
+      console.error(`[VOICE] TTS response JSON parse error:`, {
+        error: parseErr.message,
+        body: ttsBodyText.slice(0, 300),
+        status: ttsStatus,
+      });
+      return;
+    }
+
+    const audioUrl = ttsData.audio_url || null;
+    console.debug(`[VOICE] TTS parsed:`, {
+      reqId: ttsReqId,
+      audio_url: ttsData.audio_url,
+      fullAudioUrl: audioUrl,
+      voice: ttsData.voice,
+      durationSec: ttsData.audio_duration_sec,
+      generationSec: ttsData.generation_time_sec,
+      elapsedSec: ttsElapsed,
+    });
+
+    if (!audioUrl) {
+      console.error(`[VOICE] TTS response missing audio_url:`, ttsData);
+      return;
+    }
+
+    debugLog("tts", `${ttsElapsed}s`);
+    debugLog("audio_url", audioUrl);
+
+    // --- Stage 4: Fetch WAV bytes via audio proxy ---
+    console.debug(`[VOICE] Fetching WAV bytes from: ${audioUrl}`);
+    const wavRes = await fetch(audioUrl);
+    if (!wavRes.ok) {
+      console.error(`[VOICE] WAV fetch failed: status=${wavRes.status}`);
+      return;
+    }
+    const wavArrayBuffer = await wavRes.arrayBuffer();
+    console.debug(`[VOICE] WAV fetched: ${wavArrayBuffer.byteLength} bytes`);
+
+    // --- Stage 5: Decode and play via AudioContext ---
+    const ctx = ensureAudioCtx();
+    if (ctx.state === "suspended") {
+      console.warn(`[VOICE] AudioContext is suspended — attempting resume`);
+      await ctx.resume();
+    }
+
+    const audioBuffer = await ctx.decodeAudioData(wavArrayBuffer.slice(0));
+    console.debug(`[VOICE] Audio decoded: duration=${audioBuffer.duration.toFixed(3)}s channels=${audioBuffer.numberOfChannels} sampleRate=${audioBuffer.sampleRate}`);
+
+    const source = ctx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(ctx.destination);
+
+    source.onended = () => {
+      console.debug(`[VOICE] Audio playback ended`, { reqId: ttsReqId });
+    };
+
+    source.start(0);
+    console.debug(`[VOICE] Audio playback started via AudioContext`, {
+      reqId: ttsReqId,
+      duration: audioBuffer.duration,
+      ctxState: ctx.state,
+    });
   } catch (err) {
-    console.warn("TTS error (text reply still shown):", err);
+    console.error(`[VOICE] TTS unexpected error (text reply still shown):`, {
+      reqId: ttsReqId,
+      errorName: err.name,
+      errorMessage: err.message,
+      errorStack: err.stack,
+    });
   }
 }
 
@@ -548,6 +678,9 @@ form.addEventListener("submit", (event) => {
   if (!content) {
     return;
   }
+
+  // Prime AudioContext on user gesture
+  ensureAudioCtx();
 
   input.value = "";
   resizeInput();
@@ -597,15 +730,18 @@ async function loadVoiceConfig() {
     const cfg = await res.json();
     voiceEnabled = cfg.voice_enabled === true;
     sidecarUrl = cfg.sidecar_url || "";
+    console.debug(`[VOICE] config loaded: enabled=${voiceEnabled} sidecar=${sidecarUrl}`);
     if (voiceEnabled && sidecarUrl) {
       micButton.hidden = false;
       voiceToggleRow.hidden = false;
       voiceDebugPanel.hidden = false;
       debugLog("asr", "ready");
       debugLog("tts", "ready");
+    } else {
+      console.debug(`[VOICE] config incomplete: enabled=${voiceEnabled} url=${sidecarUrl} — voice UI hidden`);
     }
-  } catch {
-    console.log("Voice config not available");
+  } catch (err) {
+    console.debug("[VOICE] config fetch failed:", err.message);
   }
 }
 

@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WAV Playback Test</title>
+  <style>
+    body { font-family: sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; }
+    h1 { font-size: 1.4rem; }
+    .field { margin: 16px 0; }
+    label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 4px; }
+    input[type="text"] { width: 100%; padding: 8px; box-sizing: border-box; font-family: monospace; font-size: 0.85rem; }
+    button { padding: 10px 20px; font-size: 1rem; margin-right: 8px; }
+    audio { width: 100%; margin: 12px 0; }
+    #log { background: #f4f4f4; padding: 12px; border-radius: 6px; font-family: monospace; font-size: 0.82rem; height: 300px; overflow-y: auto; white-space: pre-wrap; }
+    .pass { color: #1a7a1a; }
+    .fail { color: #c0392b; }
+    .info { color: #2c6b9c; }
+  </style>
+</head>
+<body>
+  <h1>WAV Playback Test</h1>
+  <p>This page tests whether the browser can play a proxied WAV file from <code>/api/voice/audio/</code>.</p>
+  <p>It does <strong>not</strong> call Lisa chat, TTS, or the sidecar — it only loads a known WAV URL.</p>
+
+  <div class="field">
+    <label for="wavUrl">WAV URL (relative to this server)</label>
+    <input type="text" id="wavUrl" value="/api/voice/audio/tts_1781540989534_F1.wav" />
+  </div>
+
+  <div>
+    <button id="loadBtn">Load Test WAV</button>
+    <button id="playBtn" disabled>Play Test WAV</button>
+  </div>
+
+  <audio id="player" controls></audio>
+
+  <h3>Event Log</h3>
+  <div id="log"></div>
+
+  <script>
+    const urlInput = document.getElementById("wavUrl");
+    const loadBtn = document.getElementById("loadBtn");
+    const playBtn = document.getElementById("playBtn");
+    const player = document.getElementById("player");
+    const logEl = document.getElementById("log");
+
+    function log(msg, className) {
+      const line = document.createElement("div");
+      line.textContent = `[${new Date().toISOString().slice(11, 23)}] ${msg}`;
+      if (className) line.className = className;
+      logEl.appendChild(line);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    // Attach all audio lifecycle events
+    const events = [
+      "loadstart", "loadedmetadata", "canplay", "canplaythrough",
+      "play", "playing", "ended", "pause", "stalled", "waiting", "error", "suspend", "abort"
+    ];
+    events.forEach((evt) => {
+      player.addEventListener(evt, () => {
+        const m = `event: ${evt}  readyState=${player.readyState} networkState=${player.networkState} paused=${player.paused} currentTime=${player.currentTime.toFixed(3)} duration=${player.duration.toFixed(3) || "?"} error=${player.error ? player.error.code + " " + player.error.message : "none"}`;
+        log(m, "info");
+      });
+    });
+
+    loadBtn.addEventListener("click", async () => {
+      const url = urlInput.value.trim();
+      if (!url) { log("No URL entered", "fail"); return; }
+
+      log(`Loading: ${url}`, "info");
+      player.src = url;
+      player.load();
+
+      log(`player.src set to "${url}"`, "info");
+      log(`player.readyState=${player.readyState} networkState=${player.networkState}`, "info");
+
+      playBtn.disabled = false;
+    });
+
+    playBtn.addEventListener("click", async () => {
+      const url = player.src;
+      if (!url) { log("No audio loaded", "fail"); return; }
+
+      log(`Calling audio.play() for "${url}" ...`, "info");
+      log(`volume=${player.volume} muted=${player.muted} autoplay=${player.autoplay}`, "info");
+
+      try {
+        await player.play();
+        log("audio.play() RESOLVED — playback started", "pass");
+      } catch (err) {
+        log(`audio.play() REJECTED: name=${err.name} message="${err.message}"`, "fail");
+        log(`stack: ${err.stack}`, "fail");
+      }
+    });
+
+    // Log initial state
+    log("Page loaded. Enter a WAV URL and click Load.", "info");
+    log("Default URL is from the last successful TTS proxy test.", "info");
+    log("If that file no longer exists, generate a new one:", "info");
+    log('  curl -X POST http://127.0.0.1:3320/api/voice/tts -H "Content-Type: application/json" -d \'{"text":"test","voice":"F1"}\'', "info");
+  </script>
+</body>
+</html>

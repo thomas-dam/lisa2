@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 LOGS="$ROOT/.runtime/logs"
 PIDS="$ROOT/.runtime/pids"
 BOT_PID="$PIDS/bot.pid"
+VOICE_PID="$PIDS/voice.pid"
 OLLAMA_HOST="http://127.0.0.1:11434"
 BOT_HOST="http://127.0.0.1:3320"
 REQUIRED_MODEL="Lisa-The-Bot:latest"
@@ -35,63 +36,95 @@ fi
 echo ""
 echo "[Bot]"
 BOT_RUNNING=false
+BOT_MANAGED=false
 if [ -f "$BOT_PID" ]; then
   PID=$(cat "$BOT_PID" 2>/dev/null || true)
   if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
-    echo "  Status:  ✓ Running (PID $PID)"
+    echo "  Status:  ✓ Running (PID $PID, managed)"
     BOT_RUNNING=true
+    BOT_MANAGED=true
   else
     echo "  Status:  ✗ PID file exists but process is dead (stale)"
     rm -f "$BOT_PID"
   fi
 fi
-
 if [ "$BOT_RUNNING" = false ]; then
   PORT_PID=$(lsof -ti :3320 2>/dev/null || true)
   if [ -n "$PORT_PID" ]; then
-    echo "  Status:  ⚠ Port 3320 occupied by PID $PORT_PID (not managed by these scripts)"
+    CMD=$(ps -p "$PORT_PID" -o comm= 2>/dev/null || echo "?")
+    echo "  Status:  ⚠ UNMANAGED PROCESS (PID $PORT_PID, $CMD) — restart with ./start-lisa.sh"
     BOT_RUNNING=true
   else
     echo "  Status:  ✗ Not running"
   fi
 fi
-
 if curl -sf "$BOT_HOST/api/config" > /dev/null 2>&1; then
   echo "  API:     ✓ Responding on $BOT_HOST"
 else
   echo "  API:     ✗ Not responding"
 fi
 
-# --- Port ---
+# --- Voice Sidecar ---
 echo ""
-echo "[Port 3320]"
-if lsof -ti :3320 > /dev/null 2>&1; then
-  echo "  Occupied: Yes"
-  lsof -i :3320 2>/dev/null | head -2 | tail -1 | awk '{print "  Process:  " $1 " (PID " $2 ")"}'
-else
-  echo "  Occupied: No (free)"
+echo "[Voice Sidecar]"
+VOICE_RUNNING=false
+VOICE_MANAGED=false
+if [ -f "$VOICE_PID" ]; then
+  VPID=$(cat "$VOICE_PID" 2>/dev/null || true)
+  if [ -n "$VPID" ] && kill -0 "$VPID" 2>/dev/null; then
+    echo "  Status:  ✓ Running (PID $VPID, managed)"
+    VOICE_RUNNING=true
+    VOICE_MANAGED=true
+  else
+    echo "  Status:  ✗ PID file exists but process is dead (stale)"
+    rm -f "$VOICE_PID"
+  fi
+fi
+if [ "$VOICE_RUNNING" = false ]; then
+  VPORT_PID=$(lsof -ti :3330 2>/dev/null || true)
+  if [ -n "$VPORT_PID" ]; then
+    CMD=$(ps -p "$VPORT_PID" -o comm= 2>/dev/null || echo "?")
+    echo "  Status:  ⚠ UNMANAGED PROCESS (PID $VPORT_PID, $CMD) — restart with ./start-lisa.sh"
+    VOICE_RUNNING=true
+  else
+    echo "  Status:  ✗ Not running"
+  fi
+fi
+if [ "$VOICE_RUNNING" = true ]; then
+  if curl -sf http://127.0.0.1:3330/api/health > /dev/null 2>&1; then
+    echo "  Health:  ✓ Responding"
+  else
+    echo "  Health:  ✗ Not responding"
+  fi
 fi
 
-# --- Logs ---
+# --- Log Files ---
 echo ""
 echo "[Log Files]"
-LOG_DIR="$LOGS"
-if [ -d "$LOG_DIR" ]; then
+if [ -d "$LOGS" ]; then
   found=false
-  for f in "$LOG_DIR"/*.log; do
+  for f in "$LOGS"/*.log; do
     if [ -f "$f" ]; then
       name=$(basename "$f")
       lines=$(wc -l < "$f")
       size=$(du -h "$f" | cut -f1)
       modified=$(date -r "$f" "+%Y-%m-%d %H:%M:%S" 2>/dev/null || stat -f "%Sm" "$f" 2>/dev/null || echo "?")
-      echo "  $name  ($lines lines, $size, last: $modified)"
+      managed=""
+      if [ "$name" = "bot.log" ] && [ "$BOT_MANAGED" = true ]; then managed=" (managed)"; fi
+      if [ "$name" = "voice.log" ] && [ "$VOICE_MANAGED" = true ]; then managed=" (managed)"; fi
+      echo "  $name  ($lines lines, $size, last: $modified)$managed"
       found=true
     fi
   done
   if [ "$found" = false ]; then
-    echo "  (no log files yet)"
+    if [ "$BOT_RUNNING" = true ] || [ "$VOICE_RUNNING" = true ]; then
+      echo "  (no log files — services are running but were started outside these scripts)"
+      echo "  Use ./start-lisa.sh [--with-voice] for managed startup with logs"
+    else
+      echo "  (no services running)"
+    fi
   fi
-  echo "  Directory: $LOG_DIR/"
+  echo "  Directory: $LOGS/"
 else
   echo "  (no log directory)"
 fi
