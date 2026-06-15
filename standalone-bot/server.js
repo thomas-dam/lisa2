@@ -46,6 +46,7 @@ const contentTypes = new Map([
 let history = null;
 let visualRetriever = null;
 let zImageRetriever = null;
+let combinedRetriever = null;
 let visualSections = null;
 let zImageSections = null;
 let ollemaChat = null;
@@ -87,6 +88,16 @@ async function initializeChat() {
   const zResult = await tryLoadReference(join(__dirname, "z-image-reference.md"), "z-image");
   zImageRetriever = zResult.retriever;
   zImageSections = zResult.sections;
+
+  combinedRetriever = (text) => {
+    const vHit = visualRetriever ? visualRetriever(text) : null;
+    const zHit = zImageRetriever ? zImageRetriever(text) : null;
+    const results = [];
+    if (vHit) results.push(vHit);
+    if (zHit) results.push(zHit);
+    return results.length > 0 ? results : null;
+  };
+
   ollemaChat = createOllamaChat({ url: OLLAMA_URL, model: OLLAMA_MODEL });
 }
 
@@ -188,12 +199,12 @@ async function handleChat(req, res, reqId) {
       return;
     }
 
-    // --- Normal chat: only visual retriever ---
+    // --- Normal chat: combined retrievers (visual + z-image) ---
     const reply = await chatTurn({
       history,
       userTurn: userContent,
       images: userImages,
-      loadSection: visualRetriever,
+      loadSection: combinedRetriever,
       fetchUrl,
       chat: ollemaChat
     });
