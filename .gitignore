@@ -4,3 +4,4 @@ outputs/
 voice-sidecar/.venv/
 voice-sidecar/__pycache__/
 .DS_Store__pycache__/
+voice-sidecar/**/__pycache__/
