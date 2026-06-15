@@ -3,5 +3,6 @@ outputs/
 .runtime/
 voice-sidecar/.venv/
 voice-sidecar/__pycache__/
-.DS_Store__pycache__/
+.DS_Store
+__pycache__/
 voice-sidecar/**/__pycache__/

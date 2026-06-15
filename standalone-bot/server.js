@@ -32,7 +32,31 @@ const HOST = process.env.HOST || "127.0.0.1";
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "Lisa-The-Bot:latest";
 const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY || "";
-const SYSTEM_PROMPT = process.env.SYSTEM_PROMPT || "";
+const SYSTEM_PROMPT_OVERRIDE = process.env.SYSTEM_PROMPT || "";
+
+async function fetchModelSystemPrompt() {
+  try {
+    const res = await fetch(`${OLLAMA_URL}/api/show`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: OLLAMA_MODEL }),
+    });
+    if (!res.ok) {
+      console.log(`[persona] Ollama /api/show returned ${res.status}`);
+      return "";
+    }
+    const data = await res.json();
+    if (data.system) {
+      console.log(`[persona] loaded system prompt from Ollama model (${data.system.length} chars)`);
+      return data.system;
+    }
+    console.log("[persona] model has no system prompt in Modelfile");
+    return "";
+  } catch (error) {
+    console.log(`[persona] could not fetch system prompt from Ollama: ${error.message}`);
+    return "";
+  }
+}
 
 const contentTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -44,9 +68,9 @@ const contentTypes = new Map([
 
 // Persistent server state: owned by lisa-chat.js
 let history = null;
+let personaText = "";
 let visualRetriever = null;
 let zImageRetriever = null;
-let combinedRetriever = null;
 let visualSections = null;
 let zImageSections = null;
 let ollemaChat = null;
@@ -80,23 +104,14 @@ function parseCommand(text) {
 
 // Initialize on startup
 async function initializeChat() {
-  const systemPrompt = SYSTEM_PROMPT ? SYSTEM_PROMPT.trim() : "";
-  history = createHistory(systemPrompt);
+  personaText = SYSTEM_PROMPT_OVERRIDE ? SYSTEM_PROMPT_OVERRIDE.trim() : await fetchModelSystemPrompt();
+  history = createHistory(personaText);
   const visualResult = await tryLoadReference(join(__dirname, "visual-reference.md"), "visual");
   visualRetriever = visualResult.retriever;
   visualSections = visualResult.sections;
   const zResult = await tryLoadReference(join(__dirname, "z-image-reference.md"), "z-image");
   zImageRetriever = zResult.retriever;
   zImageSections = zResult.sections;
-
-  combinedRetriever = (text) => {
-    const vHit = visualRetriever ? visualRetriever(text) : null;
-    const zHit = zImageRetriever ? zImageRetriever(text) : null;
-    const results = [];
-    if (vHit) results.push(vHit);
-    if (zHit) results.push(zHit);
-    return results.length > 0 ? results : null;
-  };
 
   ollemaChat = createOllamaChat({ url: OLLAMA_URL, model: OLLAMA_MODEL });
 }
@@ -199,12 +214,12 @@ async function handleChat(req, res, reqId) {
       return;
     }
 
-    // --- Normal chat: combined retrievers (visual + z-image) ---
+    // --- Normal chat: visual retriever only ---
     const reply = await chatTurn({
       history,
       userTurn: userContent,
       images: userImages,
-      loadSection: combinedRetriever,
+      loadSection: visualRetriever,
       fetchUrl,
       chat: ollemaChat
     });
@@ -265,8 +280,7 @@ async function handleModels(res) {
 }
 
 async function handleNewChat(req, res) {
-  const systemPrompt = SYSTEM_PROMPT ? SYSTEM_PROMPT.trim() : "";
-  history = createHistory(systemPrompt);
+  history = createHistory(personaText);
   lastGeneratedPrompt = null;
   sendJson(res, 200, { message: "Chat reset." });
 }
