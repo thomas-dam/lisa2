@@ -336,6 +336,70 @@ textarea {
   background: #e5ece8;
 }
 
+/* ---- Voice UI ---- */
+
+.mic-button {
+  font-size: 1.2rem;
+  line-height: 1;
+  padding: 0 14px;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.mic-button.recording {
+  background: #c0392b;
+  color: #fff;
+  border-color: #c0392b;
+  box-shadow: 0 0 0 3px rgba(192, 57, 43, 0.3);
+}
+
+.voice-toggle-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.voice-toggle-row span {
+  font-size: 0.82rem;
+}
+
+.voice-toggle-row input[type="checkbox"] {
+  width: auto;
+  min-height: auto;
+}
+
+.voice-debug {
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.03);
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.voice-debug summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.voice-debug[open] summary {
+  margin-bottom: 8px;
+}
+
+.debug-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 16px;
+}
+
+.debug-label {
+  display: inline-block;
+  width: 80px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
 @media (max-width: 760px) {
   .app-shell {
     grid-template-columns: 1fr;

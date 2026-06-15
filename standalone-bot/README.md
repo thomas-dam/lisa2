@@ -51,15 +51,23 @@ PORT=3320 OLLAMA_URL=http://127.0.0.1:11434 OLLAMA_MODEL=Lisa-The-Bot:latest npm
 
 You can also change the model from the app sidebar dropdown (populated from your installed Ollama models) before sending a message.
 
-The persona is defined entirely by the `Lisa-The-Bot` Modelfile. The server sends no system message by default; set `SYSTEM_PROMPT` only if you deliberately want to override the Modelfile.
-
-## Web search
-
-A "Search web" button runs the query, injects the results as ephemeral context into the message sent to Lisa, and discards them (they never enter chat history). Without a key it uses DuckDuckGo instant answers; for better results set an Exa key:
+The persona is defined entirely by the `Lisa-The-Bot` Modelfile. The server sends no system message by default. To deliberately override the Modelfile persona, set `SYSTEM_PROMPT`:
 
 ```sh
-EXA_API_KEY=your_key npm start
+SYSTEM_PROMPT="You are Lisa. Warm, dry, confident. Keep replies short." npm start
 ```
+
+## URL Fetching
+
+When a user message contains a URL, the bot automatically fetches the page content using Firecrawl. The fetched text and any images found on the page are injected as ephemeral context into that one reply only — never stored in chat history.
+
+Set a Firecrawl API key to enable URL fetching:
+
+```sh
+FIRECRAWL_API_KEY=fc-your-key npm start
+```
+
+Without a key, URL detection still works but gracefully degrades (no fetch performed). The bot works fine without it.
 
 ## Tests
 

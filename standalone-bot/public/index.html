@@ -19,6 +19,10 @@
         </label>
         <button id="newChatButton" class="secondary-button" type="button">New chat</button>
         <button id="saveChatButton" class="secondary-button" type="button">Save chat</button>
+        <label class="field voice-toggle-row" hidden>
+          <span>Speak Responses</span>
+          <input id="speakToggle" type="checkbox" checked />
+        </label>
         <p id="statusText" class="status" role="status">Ready</p>
       </aside>
 
@@ -42,15 +46,27 @@
               required
             ></textarea>
             <div class="composer-actions">
-              <div class="composer-tools">
-                <button id="imageButton" class="secondary-button" type="button">Image</button>
-                <input id="imageInput" type="file" accept="image/*" hidden />
-                <button id="searchButton" class="secondary-button" type="button">Search web</button>
-              </div>
+            <div class="composer-tools">
+              <button id="imageButton" class="secondary-button" type="button">Image</button>
+              <input id="imageInput" type="file" accept="image/*" hidden />
+              <button id="micButton" class="secondary-button mic-button" type="button" hidden>🎤</button>
+            </div>
               <button id="sendButton" type="submit">Send</button>
             </div>
           </form>
         </div>
+
+        <details id="voiceDebugPanel" class="voice-debug" hidden>
+          <summary>Voice Debug</summary>
+          <div class="debug-grid">
+            <div><span class="debug-label">Recording</span><span id="debugRecording">-</span></div>
+            <div><span class="debug-label">Transcript</span><span id="debugTranscript">-</span></div>
+            <div><span class="debug-label">ASR</span><span id="debugAsr">-</span></div>
+            <div><span class="debug-label">Chat</span><span id="debugChat">-</span></div>
+            <div><span class="debug-label">TTS</span><span id="debugTts">-</span></div>
+            <div><span class="debug-label">Audio URL</span><span id="debugAudioUrl">-</span></div>
+          </div>
+        </details>
       </section>
     </main>
     <script src="/app.js" type="module"></script>

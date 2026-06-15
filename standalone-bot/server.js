@@ -2,16 +2,37 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHistory, chatTurn, createRetriever, createFullRetriever, loadReference, createOllamaChat, fetchUrlWithFirecrawl, extractUrlFromTurn } from "./lisa-chat.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(__dirname, "public");
+const configDir = join(__dirname, "..", "config");
+const VOICE_CONFIG_PATH = join(configDir, "voice.json");
+
+let voiceConfig = { voice_enabled: false };
+
+async function loadVoiceConfig() {
+  try {
+    const raw = await readFile(VOICE_CONFIG_PATH, "utf8");
+    voiceConfig = JSON.parse(raw);
+    console.log(`[voice] config loaded: enabled=${voiceConfig.voice_enabled}`);
+  } catch {
+    console.log("[voice] config/voice.json not found, voice disabled");
+  }
+}
+
+let reqCounter = 0;
+function nextReqId() {
+  reqCounter += 1;
+  return `req_${String(reqCounter).padStart(3, "0")}`;
+}
 
 const PORT = Number(process.env.PORT || 3320);
 const HOST = process.env.HOST || "127.0.0.1";
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "Lisa-The-Bot:latest";
+const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY || "";
 const SYSTEM_PROMPT = process.env.SYSTEM_PROMPT || "";
-const EXA_API_KEY = process.env.EXA_API_KEY || "";
 
 const contentTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -21,13 +42,63 @@ const contentTypes = new Map([
   [".svg", "image/svg+xml; charset=utf-8"]
 ]);
 
+// Persistent server state: owned by lisa-chat.js
+let history = null;
+let visualRetriever = null;
+let zImageRetriever = null;
+let visualSections = null;
+let zImageSections = null;
+let ollemaChat = null;
+let lastGeneratedPrompt = null;
+
+async function tryLoadReference(path, label) {
+  try {
+    const sections = await loadReference(path);
+    console.log(`[reference] ${label}: ${sections.length} sections loaded`);
+    for (let i = 0; i < sections.length; i += 1) {
+      console.log(`[reference]   keyword: ${sections[i].keywords.join(", ")}`);
+    }
+    return { retriever: createRetriever(sections), sections };
+  } catch (error) {
+    console.error(`[reference] ${label}: failed to load (${error.message})`);
+    return { retriever: () => null, sections: [] };
+  }
+}
+
+// Command routing: returns null for normal messages, or a descriptor for image commands
+function parseCommand(text) {
+  const lower = text.trim().toLowerCase();
+  if (lower.startsWith("/create image")) {
+    return { type: "create_image", text: text.slice("/create image".length).trim() };
+  }
+  if (lower.startsWith("/iterate image")) {
+    return { type: "iterate_image", text: text.slice("/iterate image".length).trim() };
+  }
+  return null;
+}
+
+// Initialize on startup
+async function initializeChat() {
+  const systemPrompt = SYSTEM_PROMPT ? SYSTEM_PROMPT.trim() : "";
+  history = createHistory(systemPrompt);
+  const visualResult = await tryLoadReference(join(__dirname, "visual-reference.md"), "visual");
+  visualRetriever = visualResult.retriever;
+  visualSections = visualResult.sections;
+  const zResult = await tryLoadReference(join(__dirname, "z-image-reference.md"), "z-image");
+  zImageRetriever = zResult.retriever;
+  zImageSections = zResult.sections;
+  ollemaChat = createOllamaChat({ url: OLLAMA_URL, model: OLLAMA_MODEL });
+}
+
 function sendJson(res, statusCode, payload) {
   const body = JSON.stringify(payload);
+  const bytes = Buffer.byteLength(body);
   res.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(body)
+    "content-length": bytes
   });
   res.end(body);
+  return bytes;
 }
 
 async function readRequestJson(req) {
@@ -41,105 +112,115 @@ async function readRequestJson(req) {
   return raw ? JSON.parse(raw) : {};
 }
 
-function cleanImages(images) {
-  if (!Array.isArray(images)) {
-    return undefined;
-  }
-
-  const cleaned = images
-    .filter((image) => typeof image === "string" && image.length > 0)
-    .map((image) => image.slice(0, 5_000_000))
-    .slice(0, 4);
-
-  return cleaned.length > 0 ? cleaned : undefined;
-}
-
-function cleanMessages(messages) {
-  if (!Array.isArray(messages)) {
-    return [];
-  }
-
-  return messages
-    .filter((message) => message && typeof message.content === "string")
-    .map((message) => {
-      const cleaned = {
-        role: message.role === "assistant" ? "assistant" : "user",
-        content: message.content.slice(0, 12_000)
-      };
-
-      if (cleaned.role === "user") {
-        const images = cleanImages(message.images);
-        if (images) {
-          cleaned.images = images;
-        }
+function buildFetchUrl() {
+  return FIRECRAWL_API_KEY
+    ? async (userTurn) => {
+        const url = extractUrlFromTurn(userTurn);
+        if (!url) return null;
+        return await fetchUrlWithFirecrawl(url, FIRECRAWL_API_KEY);
       }
-
-      return cleaned;
-    })
-    .slice(-20);
+    : null;
 }
 
-async function handleChat(req, res) {
+async function handleChat(req, res, reqId) {
   try {
     const body = await readRequestJson(req);
-    const messages = cleanMessages(body.messages);
+    const userContent = body.content || "";
+    const userImages = Array.isArray(body.images) ? body.images.slice(0, 4) : [];
+    console.log(`[DIAG-REQ] ${reqId} BODY_LEN body_bytes=${Buffer.byteLength(JSON.stringify(body))} content_chars=${userContent.length}`);
 
-    if (messages.length === 0) {
-      sendJson(res, 400, { error: "Send at least one message." });
+    if (!userContent.trim()) {
+      const bytes = sendJson(res, 400, { error: "Send at least one message." });
+      console.log(`[DIAG-REQ] ${reqId} END status=400 bytes=${bytes}`);
       return;
     }
 
-    const ollamaResponse = await fetch(`${OLLAMA_URL}/api/chat`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: body.model || OLLAMA_MODEL,
-        stream: false,
-        messages: [
-          ...(SYSTEM_PROMPT ? [{ role: "system", content: SYSTEM_PROMPT }] : []),
-          ...messages
-        ]
-      })
-    });
+    const fetchUrl = buildFetchUrl();
+    const command = parseCommand(userContent);
 
-    if (!ollamaResponse.ok) {
-      const detail = await ollamaResponse.text();
-      sendJson(res, 502, {
-        error: "The local model server returned an error.",
-        detail: detail.slice(0, 500)
+    if (command) {
+      // --- Slash command handling (ephemeral, full reference injection) ---
+      let loadSection;
+
+      if (command.type === "create_image") {
+        const fullZ = createFullRetriever(zImageSections);
+        const fullV = createFullRetriever(visualSections);
+        loadSection = (text) => {
+          const results = [];
+          const zHit = fullZ(text);
+          if (zHit) results.push(...(Array.isArray(zHit) ? zHit : [zHit]));
+          const vHit = fullV(text);
+          if (vHit) results.push(...(Array.isArray(vHit) ? vHit : [vHit]));
+          return results.length > 0 ? results : null;
+        };
+      } else if (command.type === "iterate_image") {
+        const includesLisa = lastGeneratedPrompt
+          ? lastGeneratedPrompt.toLowerCase().includes("lisa") || command.text.toLowerCase().includes("lisa")
+          : false;
+        const fullZ = createFullRetriever(zImageSections);
+        loadSection = (text) => {
+          const results = [];
+          const zHit = fullZ(text);
+          if (zHit) results.push(...(Array.isArray(zHit) ? zHit : [zHit]));
+          if (includesLisa) {
+            const vHit = createFullRetriever(visualSections)(text);
+            if (vHit) results.push(...(Array.isArray(vHit) ? vHit : [vHit]));
+          }
+          if (lastGeneratedPrompt) {
+            results.push({ text: `Previous prompt:\n${lastGeneratedPrompt}`, keyword: "last-prompt" });
+          }
+          return results.length > 0 ? results : null;
+        };
+      }
+
+      const reply = await chatTurn({
+        history,
+        userTurn: userContent,
+        images: userImages,
+        loadSection,
+        fetchUrl,
+        chat: ollemaChat
       });
+
+      lastGeneratedPrompt = reply;
+      const bytes = sendJson(res, 200, { reply, model: OLLAMA_MODEL, historyLength: history.length });
+      console.log(`[DIAG-REQ] ${reqId} END status=200 bytes=${bytes}`);
       return;
     }
 
-    const data = await ollamaResponse.json();
-    sendJson(res, 200, {
-      reply: data?.message?.content || "",
-      model: data?.model || body.model || OLLAMA_MODEL
+    // --- Normal chat: only visual retriever ---
+    const reply = await chatTurn({
+      history,
+      userTurn: userContent,
+      images: userImages,
+      loadSection: visualRetriever,
+      fetchUrl,
+      chat: ollemaChat
     });
+
+    const bytes = sendJson(res, 200, {
+      reply,
+      model: OLLAMA_MODEL,
+      historyLength: history.length
+    });
+    console.log(`[DIAG-REQ] ${reqId} END status=200 bytes=${bytes}`);
   } catch (error) {
-    sendJson(res, 500, {
+    const bytes = sendJson(res, 500, {
       error:
         error instanceof SyntaxError
           ? "Invalid JSON request."
           : "Could not reach the local model server.",
       detail: error.message
     });
+    console.log(`[DIAG-REQ] ${reqId} CATCH status=500 bytes=${bytes} err=${error.message}`);
   }
 }
 
 async function handleSave(req, res) {
   try {
-    const body = await readRequestJson(req);
-    const messages = cleanMessages(body.messages);
-
-    if (messages.length === 0) {
-      sendJson(res, 400, { error: "Send at least one message." });
-      return;
-    }
-
     sendJson(res, 200, {
-      messages,
-      title: typeof body.title === "string" ? body.title.slice(0, 120) : "Standalone Bot Chat",
+      messages: history,
+      title: "Standalone Bot Chat",
       savedAt: new Date().toISOString()
     });
   } catch (error) {
@@ -172,42 +253,23 @@ async function handleModels(res) {
   }
 }
 
-async function handleSearch(req, res) {
-  const { searchParams } = new URL(req.url, "http://localhost");
-  const query = (searchParams.get("q") || "").trim();
-  if (!query) {
-    sendJson(res, 400, { error: "Missing search query." });
-    return;
-  }
-  try {
-    let results = [];
-    if (EXA_API_KEY) {
-      const r = await fetch("https://api.exa.ai/search", {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-api-key": EXA_API_KEY },
-        body: JSON.stringify({ query, numResults: 5, contents: { text: { maxCharacters: 800 } } })
-      });
-      const data = await r.json();
-      results = (data.results || []).map((item) => ({
-        title: item.title,
-        url: item.url,
-        snippet: (item.text || "").trim()
-      }));
-    } else {
-      const r = await fetch(
-        `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`
-      );
-      const data = await r.json();
-      if (data.Answer) results.push({ snippet: data.Answer });
-      if (data.AbstractText) results.push({ title: data.Heading, snippet: data.AbstractText, url: data.AbstractURL });
-      for (const t of (data.RelatedTopics || []).slice(0, 4)) {
-        if (t.Text) results.push({ snippet: t.Text, url: t.FirstURL });
-      }
-    }
-    sendJson(res, 200, { query, results });
-  } catch (err) {
-    sendJson(res, 502, { error: "Search failed.", detail: err.message });
-  }
+async function handleNewChat(req, res) {
+  const systemPrompt = SYSTEM_PROMPT ? SYSTEM_PROMPT.trim() : "";
+  history = createHistory(systemPrompt);
+  lastGeneratedPrompt = null;
+  sendJson(res, 200, { message: "Chat reset." });
+}
+
+function handleVoiceConfig(req, res) {
+  const host = req.headers["host"] || `127.0.0.1:${PORT}`;
+  const hostname = host.split(":")[0];
+  const sidecarPort = voiceConfig.sidecar?.port || 3330;
+  const sidecarUrl = `http://${hostname}:${sidecarPort}`;
+  sendJson(res, 200, {
+    voice_enabled: voiceConfig.voice_enabled === true,
+    sidecar_url: sidecarUrl,
+    default_voice: (voiceConfig.tts || {}).voice || "F1",
+  });
 }
 
 async function serveStatic(req, res) {
@@ -244,18 +306,41 @@ const server = createServer((req, res) => {
     return;
   }
 
-  if (req.method === "GET" && req.url.startsWith("/api/search")) {
-    void handleSearch(req, res);
-    return;
-  }
-
   if (req.method === "POST" && req.url === "/api/chat") {
-    void handleChat(req, res);
+    const reqId = nextReqId();
+    const startTime = Date.now();
+    res.setHeader("X-Request-Id", reqId);
+    console.log(`[DIAG-REQ] ${reqId} START method=POST url=/api/chat time=${startTime}`);
+
+    req.on("close", () => {
+      console.log(`[DIAG-REQ] ${reqId} REQ-CLOSE elapsed=${Date.now() - startTime}ms`);
+    });
+    res.on("finish", () => {
+      console.log(`[DIAG-REQ] ${reqId} RES-FINISH status=${res.statusCode} elapsed=${Date.now() - startTime}ms`);
+    });
+    res.on("close", () => {
+      console.log(`[DIAG-REQ] ${reqId} RES-CLOSE status=${res.statusCode} elapsed=${Date.now() - startTime}ms`);
+    });
+    res.on("error", (err) => {
+      console.log(`[DIAG-REQ] ${reqId} RES-ERROR ${err.message}`);
+    });
+
+    void handleChat(req, res, reqId);
     return;
   }
 
   if (req.method === "POST" && req.url === "/api/save") {
     void handleSave(req, res);
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/new-chat") {
+    void handleNewChat(req, res);
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/api/voice-config") {
+    handleVoiceConfig(req, res);
     return;
   }
 
@@ -267,6 +352,10 @@ const server = createServer((req, res) => {
   res.writeHead(405, { allow: "GET, HEAD, POST" });
   res.end("Method not allowed");
 });
+
+// Initialize chat system and start server
+await initializeChat();
+await loadVoiceConfig();
 
 server.listen(PORT, HOST, () => {
   console.log(`Standalone bot listening on http://${HOST}:${PORT}`);

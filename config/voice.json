@@ -1,0 +1,31 @@
+{
+  "_comment": "Voice system configuration. Read by both Node.js Lisa server and Python voice sidecar.",
+  "voice_enabled": true,
+  "sidecar": {
+    "host": "127.0.0.1",
+    "port": 3330,
+    "base_url": "http://127.0.0.1:3330"
+  },
+  "asr": {
+    "provider": "whispermlx",
+    "model": "large-v3",
+    "device": "cpu",
+    "language": "en"
+  },
+  "tts": {
+    "provider": "supertonic",
+    "voice": "F1",
+    "language": "en",
+    "speeds": {
+      "F1": 1.05,
+      "F2": 1.0,
+      "M1": 1.0,
+      "M2": 1.0
+    }
+  },
+  "audio": {
+    "tmp_dir": "tmp/voice",
+    "output_dir": "outputs/voice",
+    "cleanup_after_minutes": 60
+  }
+}

@@ -1,0 +1,12 @@
+fastapi>=0.100
+uvicorn>=0.20
+python-dotenv>=1.0
+python-multipart>=0.0.5
+supertonic>=1.0
+numpy<2.0
+whispermlx>=3.0
+mlx_whisper>=0.4
+pyannote.audio>=4.0
+omegaconf>=2.3
+torch>=2.0
+torchaudio>=2.0

@@ -6,14 +6,33 @@ const newChatButton = document.querySelector("#newChatButton");
 const saveChatButton = document.querySelector("#saveChatButton");
 const imageButton = document.querySelector("#imageButton");
 const imageInput = document.querySelector("#imageInput");
-const searchButton = document.querySelector("#searchButton");
 const attachmentTray = document.querySelector("#attachmentTray");
 const statusText = document.querySelector("#statusText");
 const modelInput = document.querySelector("#modelInput");
+const micButton = document.querySelector("#micButton");
+const speakToggle = document.querySelector("#speakToggle");
+const voiceToggleRow = document.querySelector(".voice-toggle-row");
+const voiceDebugPanel = document.querySelector("#voiceDebugPanel");
+const debugRecording = document.querySelector("#debugRecording");
+const debugTranscript = document.querySelector("#debugTranscript");
+const debugAsr = document.querySelector("#debugAsr");
+const debugChat = document.querySelector("#debugChat");
+const debugTts = document.querySelector("#debugTts");
+const debugAudioUrl = document.querySelector("#debugAudioUrl");
 
-let messages = [];
 let busy = false;
 let pendingAttachments = [];
+let mediaRecorder = null;
+let mediaStream = null;
+let audioChunks = [];
+let sidecarUrl = "";
+let voiceEnabled = false;
+let speakResponses = true;
+
+function debugLog(label, value) {
+  const el = { recording: debugRecording, transcript: debugTranscript, asr: debugAsr, chat: debugChat, tts: debugTts, audio_url: debugAudioUrl }[label];
+  if (el) el.textContent = value;
+}
 
 function setStatus(text) {
   statusText.textContent = text;
@@ -92,12 +111,16 @@ function clearAttachments() {
 }
 
 function resetChat() {
-  messages = [];
   messagesEl.innerHTML = "";
   addMessage("assistant", "Send a message to start a local conversation.");
   setStatus("Ready");
   clearAttachments();
   input.focus();
+  
+  // Notify server to reset history
+  void fetch("/api/new-chat", { method: "POST" }).catch(() => {
+    console.error("Failed to reset chat on server");
+  });
 }
 
 async function loadConfig() {
@@ -269,21 +292,20 @@ async function handleImageSelection(files) {
   }
 }
 
-async function sendMessage(content, context = "") {
+async function sendMessage(content, fromVoice) {
   busy = true;
   sendButton.disabled = true;
   imageButton.disabled = true;
-  searchButton.disabled = true;
   saveChatButton.disabled = true;
+  micButton.disabled = true;
   setStatus("Thinking");
 
-  const images = pendingAttachments.map((attachment) => attachment.base64);
-  messages.push({
-    role: "user",
-    content,
-    images: images.length > 0 ? images : undefined,
-    attachments: pendingAttachments.map(({ name, type }) => ({ name, type }))
-  });
+  const chatStart = performance.now();
+
+  const reqId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  console.debug(`[DIAG-REQ] ${reqId} START time=${Date.now()} msg_len=${content.length}`);
+
+  // Display user message
   addMessage("user", content);
   if (pendingAttachments.length > 0) {
     const imageSummary = document.createElement("div");
@@ -297,60 +319,70 @@ async function sendMessage(content, context = "") {
   const pendingBubble = addMessage("assistant", "...");
 
   try {
-    const apiMessages = context
-      ? messages.map((m, i) =>
-          i === messages.length - 1 ? { ...m, content: `${context}\n\n${m.content}` } : m
-        )
-      : messages;
-
+    const images = pendingAttachments.map((a) => a.base64).slice(0, 4);
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: modelInput.value.trim(),
-        messages: apiMessages
-      })
+      body: JSON.stringify({ content, images: images.length > 0 ? images : undefined })
     });
-    const payload = await response.json();
+
+    console.debug(`[DIAG-REQ] ${reqId} RESPONSE status=${response.status}`);
+
+    const rawText = await response.text();
+    console.debug(`[DIAG-REQ] ${reqId} RAW_BODY length=${rawText.length}`);
+
+    if (rawText.length === 0) {
+      throw new Error("Empty response body received.");
+    }
+
+    let payload;
+    try {
+      payload = JSON.parse(rawText);
+    } catch (jsonErr) {
+      console.error(`[DIAG-REQ] ${reqId} JSON_PARSE_FAILED`, {
+        error: jsonErr.message,
+        bodyLength: rawText.length,
+        status: response.status,
+      });
+      throw new Error(`JSON parse error: ${jsonErr.message}`);
+    }
 
     if (!response.ok) {
       throw new Error(payload.detail || payload.error || "Chat request failed.");
     }
 
     const reply = payload.reply || "No response returned.";
-    messages.push({ role: "assistant", content: reply });
+    const chatTime = ((performance.now() - chatStart) / 1000).toFixed(2);
+    debugLog("chat", `${chatTime}s`);
     pendingBubble.innerHTML = renderMarkdown(reply);
     setStatus(`Ready (${payload.model || modelInput.value.trim()})`);
     clearAttachments();
+    console.debug(`[DIAG-REQ] ${reqId} OK reply_len=${reply.length}`);
+
+    if (speakResponses) {
+      await callTts(reply);
+    }
   } catch (error) {
+    console.error(`[DIAG-REQ] ${reqId} FAIL`, { error: error.message });
     pendingBubble.textContent = error.message;
     setStatus("Error");
   } finally {
     busy = false;
     sendButton.disabled = false;
     imageButton.disabled = false;
-    searchButton.disabled = false;
     saveChatButton.disabled = false;
+    micButton.disabled = false;
     messagesEl.scrollTop = messagesEl.scrollHeight;
     input.focus();
   }
 }
 
 async function saveChat() {
-  if (messages.length === 0) {
-    setStatus("Nothing to save");
-    return;
-  }
-
   saveChatButton.disabled = true;
   try {
     const response = await fetch("/api/save", {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        title: "Standalone Bot Chat",
-        messages
-      })
+      headers: { "content-type": "application/json" }
     });
 
     const payload = await response.json();
@@ -378,6 +410,122 @@ async function saveChat() {
     setStatus(error.message);
   } finally {
     saveChatButton.disabled = false;
+  }
+}
+
+// --- Voice functions ---
+
+async function ensureRecorder() {
+  if (mediaRecorder) return mediaRecorder;
+  mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const mimeCandidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+  const mimeType = mimeCandidates.find((c) => MediaRecorder.isTypeSupported(c)) || "";
+  mediaRecorder = mimeType
+    ? new MediaRecorder(mediaStream, { mimeType })
+    : new MediaRecorder(mediaStream);
+  mediaRecorder.addEventListener("dataavailable", (event) => {
+    if (event.data.size > 0) audioChunks.push(event.data);
+  });
+  mediaRecorder.addEventListener("stop", async () => {
+    const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+    audioChunks = [];
+    await handleVoiceInput(blob);
+  });
+  return mediaRecorder;
+}
+
+async function startRecording() {
+  if (busy) return;
+  setStatus("Listening");
+  micButton.classList.add("recording");
+  micButton.textContent = "🔴";
+  debugLog("recording", "started");
+  const recorder = await ensureRecorder();
+  audioChunks = [];
+  recorder.start();
+}
+
+function stopRecording() {
+  if (!mediaRecorder || mediaRecorder.state !== "recording") return;
+  micButton.classList.remove("recording");
+  micButton.textContent = "🎤";
+  mediaRecorder.stop();
+  debugLog("recording", "stopped, sending");
+}
+
+async function handleVoiceInput(audioBlob) {
+  if (!sidecarUrl) {
+    setStatus("Voice sidecar not configured");
+    return;
+  }
+
+  setStatus("Transcribing");
+  const asrStart = performance.now();
+
+  try {
+    const formData = new FormData();
+    formData.append("audio", audioBlob, "recording.webm");
+    formData.append("language", "en");
+
+    let asrRes;
+    try {
+      asrRes = await fetch(`${sidecarUrl}/api/asr`, {
+        method: "POST",
+        body: formData,
+      });
+    } catch (fetchErr) {
+      throw new Error("Voice sidecar offline — start with: npm run voice");
+    }
+
+    if (!asrRes.ok) {
+      const errData = await asrRes.text();
+      throw new Error(errData || "ASR failed");
+    }
+    const asrData = await asrRes.json();
+    const transcript = asrData.transcript || "";
+    const asrTime = ((performance.now() - asrStart) / 1000).toFixed(2);
+
+    debugLog("asr", `${asrTime}s`);
+    debugLog("transcript", transcript);
+
+    if (!transcript.trim()) {
+      setStatus("No speech detected");
+      return;
+    }
+
+    await sendMessage(transcript, true);
+  } catch (err) {
+    console.error("Voice input failed:", err);
+    setStatus(`Voice error: ${err.message}`);
+    debugLog("asr", `error: ${err.message}`);
+  }
+}
+
+async function callTts(text) {
+  if (!sidecarUrl || !speakResponses) return;
+  const ttsStart = performance.now();
+  try {
+    const formData = new FormData();
+    formData.append("text", text);
+    const ttsRes = await fetch(`${sidecarUrl}/api/tts`, {
+      method: "POST",
+      body: formData,
+    });
+    if (!ttsRes.ok) {
+      const errData = await ttsRes.text();
+      console.warn("TTS failed:", errData);
+      return;
+    }
+    const ttsData = await ttsRes.json();
+    const ttsTime = ((performance.now() - ttsStart) / 1000).toFixed(2);
+    debugLog("tts", `${ttsTime}s`);
+    debugLog("audio_url", ttsData.audio_url);
+
+    const audioUrl = `${sidecarUrl}${ttsData.audio_url}`;
+    const audio = new Audio(audioUrl);
+    audio.play().catch((err) => console.warn("Audio playback failed:", err));
+  } catch (err) {
+    console.warn("TTS error (text reply still shown):", err);
   }
 }
 
@@ -414,35 +562,6 @@ imageButton.addEventListener("click", () => {
   imageInput.click();
 });
 
-searchButton.addEventListener("click", async () => {
-  const content = input.value.trim();
-  if (!content || busy) return;
-
-  searchButton.disabled = true;
-  setStatus("Searching...");
-  try {
-    const res = await fetch(`/api/search?q=${encodeURIComponent(content)}`);
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Search failed.");
-
-    let context = "";
-    if (data.results && data.results.length > 0) {
-      const lines = data.results
-        .map((r) => `- ${r.title ? `${r.title}: ` : ""}${r.snippet}${r.url ? ` (${r.url})` : ""}`)
-        .join("\n");
-      context = `Web search results for "${data.query}":\n${lines}`;
-    } else {
-      context = `Web search for "${data.query}" returned no results.`;
-    }
-
-    input.value = "";
-    resizeInput();
-    await sendMessage(content, context);
-  } catch (err) {
-    setStatus(err.message || "Search failed.");
-    searchButton.disabled = false;
-  }
-});
 imageInput.addEventListener("change", async () => {
   if (imageInput.files && imageInput.files.length > 0) {
     await handleImageSelection(imageInput.files);
@@ -450,7 +569,48 @@ imageInput.addEventListener("change", async () => {
   }
 });
 
+// --- Voice event handlers ---
+
+micButton.addEventListener("pointerdown", async (event) => {
+  event.preventDefault();
+  try {
+    await startRecording();
+  } catch (err) {
+    setStatus(err.message || "Microphone access failed.");
+  }
+});
+
+["pointerup", "pointerleave", "pointercancel"].forEach((name) => {
+  micButton.addEventListener(name, (event) => {
+    event.preventDefault();
+    stopRecording();
+  });
+});
+
+speakToggle.addEventListener("change", () => {
+  speakResponses = speakToggle.checked;
+});
+
+async function loadVoiceConfig() {
+  try {
+    const res = await fetch("/api/voice-config");
+    const cfg = await res.json();
+    voiceEnabled = cfg.voice_enabled === true;
+    sidecarUrl = cfg.sidecar_url || "";
+    if (voiceEnabled && sidecarUrl) {
+      micButton.hidden = false;
+      voiceToggleRow.hidden = false;
+      voiceDebugPanel.hidden = false;
+      debugLog("asr", "ready");
+      debugLog("tts", "ready");
+    }
+  } catch {
+    console.log("Voice config not available");
+  }
+}
+
 await loadConfig();
+await loadVoiceConfig();
 resizeInput();
 input.focus();
 renderAttachments();

@@ -1,0 +1,6 @@
+tmp/
+outputs/
+.runtime/
+voice-sidecar/.venv/
+voice-sidecar/__pycache__/
+.DS_Store__pycache__/

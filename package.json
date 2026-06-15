@@ -4,6 +4,11 @@
   "type": "module",
   "scripts": {
     "start": "npm --prefix standalone-bot start",
+    "voice": "cd voice-sidecar && .venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 3330",
+    "lisa:start": "bash start-lisa.sh",
+    "lisa:stop": "bash stop-lisa.sh",
+    "lisa:status": "bash status-lisa.sh",
+    "lisa:logs": "bash logs-lisa.sh",
     "check": "npm --prefix standalone-bot run check",
     "test": "npm --prefix standalone-bot test",
     "start:detached": "npm --prefix standalone-bot run start:detached",
