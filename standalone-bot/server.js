@@ -455,11 +455,6 @@ const server = createServer((req, res) => {
     return;
   }
 
-  if (req.method === "GET" && req.url === "/voice-test") {
-    void serveStaticFile(req, res, "voice-test.html", "text/html; charset=utf-8");
-    return;
-  }
-
   if (req.method === "GET" || req.method === "HEAD") {
     void serveStatic(req, res);
     return;

@@ -36,23 +36,7 @@
 
 ### Test Page Available
 
-`GET /voice-test` → `public/voice-test.html`
-
-A standalone diagnostic page that:
-- Lets you paste a WAV URL (/api/voice/audio/tts_xxx.wav)
-- Has native `<audio controls>` element
-- Load and Play buttons
-- Full event logging in on-page panel (loadstart, loadedmetadata, canplay, play, playing, ended, error, play() resolved/rejected)
-- Does NOT call chat, TTS, or any pipeline — purely tests browser WAV playback
-
-**Last known-good WAV URL:** `/api/voice/audio/tts_1781544541926_F1.wav` (may have been cleaned up by sidecar TTL)
-
-To generate a fresh one:
-```bash
-curl -X POST http://127.0.0.1:3320/api/voice/tts \
-  -H "Content-Type: application/json" \
-  -d '{"text":"test","voice":"F1"}'
-```
+`voice-test.html` was removed — it was a diagnostic tool used during debugging. The full pipeline is verified end-to-end.
 
 ## Architecture
 
@@ -159,7 +143,7 @@ Voice pipeline works end-to-end. Key considerations going forward:
 
 - `server.js`: Added `/api/voice/tts` and `/api/voice/audio/*` proxy routes. All sidecar URLs now use `http://127.0.0.1:3330` (hardcoded) instead of deriving from request Host header.
 - `app.js`: `callTts()` now uses Web Audio API (`AudioContext.decodeAudioData` + `BufferSource`) instead of `<audio>.play()` to avoid browser autoplay blocking. AudioContext is created and resumed on user gesture (form submit). Full `[VOICE]` instrumentation at every pipeline stage.
-- `public/voice-test.html`: New diagnostic page for WAV playback testing.
+- `public/voice-test.html`: Removed — was a diagnostic page used during debugging, no longer needed.
 - `test-e2e-voice.js`: New end-to-end test validating chat → TTS proxy → audio proxy → valid WAV header.
 - `start-lisa.sh`, `status-lisa.sh`, `logs-lisa.sh`, `start-voice.sh`: Runtime infrastructure updates (voice runs by default, UNMANAGED PROCESS warnings, deprecation of standalone voice start).
 
