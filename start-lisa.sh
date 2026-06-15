@@ -8,6 +8,7 @@ BOT_LOG="$LOGS/bot.log"
 VOICE_LOG="$LOGS/voice.log"
 BOT_PID="$PIDS/bot.pid"
 VOICE_PID="$PIDS/voice.pid"
+OLLAMA_PID="$PIDS/ollama.pid"
 OLLAMA_HOST="http://127.0.0.1:11434"
 BOT_HOST="http://127.0.0.1:3320"
 VOICE_HOST="http://127.0.0.1:3330"
@@ -21,7 +22,7 @@ cleanup() {
   if [ $exit_code -ne 0 ]; then
     echo ""
     echo "[FAIL] Startup failed. Cleaning up..."
-    for pf in "$BOT_PID" "$VOICE_PID"; do
+    for pf in "$BOT_PID" "$VOICE_PID" "$OLLAMA_PID"; do
       if [ -f "$pf" ]; then
         pid=$(cat "$pf" 2>/dev/null || true)
         if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
@@ -47,7 +48,9 @@ else
   echo "  ⚠ Ollama is not running. Attempting to start..."
   if command -v ollama > /dev/null 2>&1; then
     ollama serve > /dev/null 2>&1 &
-    echo "  Starting Ollama..."
+    OLLAMA_SERVE_PID=$!
+    echo "$OLLAMA_SERVE_PID" > "$OLLAMA_PID"
+    echo "  Starting Ollama (PID $OLLAMA_SERVE_PID)..."
     for i in $(seq 1 30); do
       if curl -sf "$OLLAMA_HOST/api/tags" > /dev/null 2>&1; then
         echo "  ✓ Ollama started"

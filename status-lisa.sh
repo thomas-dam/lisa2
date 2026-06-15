@@ -6,6 +6,7 @@ LOGS="$ROOT/.runtime/logs"
 PIDS="$ROOT/.runtime/pids"
 BOT_PID="$PIDS/bot.pid"
 VOICE_PID="$PIDS/voice.pid"
+OLLAMA_PID="$PIDS/ollama.pid"
 OLLAMA_HOST="http://127.0.0.1:11434"
 BOT_HOST="http://127.0.0.1:3320"
 REQUIRED_MODEL="Lisa-The-Bot:latest"
@@ -15,12 +16,24 @@ echo ""
 
 # --- Ollama ---
 echo "[Ollama]"
-if curl -sf "$OLLAMA_HOST/api/tags" > /dev/null 2>&1; then
-  echo "  Status:  ✓ Running on $OLLAMA_HOST"
-  OLLAMA_PID=$(lsof -ti :11434 2>/dev/null || echo "?")
-  echo "  PID:     $OLLAMA_PID"
-else
-  echo "  Status:  ✗ Not reachable on $OLLAMA_HOST"
+OLLAMA_MANAGED=false
+if [ -f "$OLLAMA_PID" ]; then
+  OPID=$(cat "$OLLAMA_PID" 2>/dev/null || true)
+  if [ -n "$OPID" ] && kill -0 "$OPID" 2>/dev/null; then
+    echo "  Status:  ✓ Running (PID $OPID, managed)"
+    OLLAMA_MANAGED=true
+  else
+    echo "  Status:  ✗ PID file exists but process is dead (stale)"
+    rm -f "$OLLAMA_PID"
+  fi
+fi
+if [ "$OLLAMA_MANAGED" = false ]; then
+  if curl -sf "$OLLAMA_HOST/api/tags" > /dev/null 2>&1; then
+    OLLAMA_PID=$(lsof -ti :11434 2>/dev/null || echo "?")
+    echo "  Status:  ✓ Running on $OLLAMA_HOST (PID $OLLAMA_PID)"
+  else
+    echo "  Status:  ✗ Not reachable on $OLLAMA_HOST"
+  fi
 fi
 
 # --- Model ---
@@ -119,7 +132,7 @@ if [ -d "$LOGS" ]; then
   if [ "$found" = false ]; then
     if [ "$BOT_RUNNING" = true ] || [ "$VOICE_RUNNING" = true ]; then
       echo "  (no log files — services are running but were started outside these scripts)"
-      echo "  Use ./start-lisa.sh [--with-voice] for managed startup with logs"
+      echo "  Use ./start-lisa.sh for managed startup with logs"
     else
       echo "  (no services running)"
     fi
