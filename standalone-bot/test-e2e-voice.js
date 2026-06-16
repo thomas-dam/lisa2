@@ -29,7 +29,7 @@ describe("Voice pipeline end-to-end", () => {
     console.log("[E2E] Stage 2: calling TTS proxy...");
     const ttsRes = await jsonPost(`${BASE}/api/voice/tts`, {
       text: reply,
-      voice: "F1",
+      voice: "F2",
       language: "en",
     });
     assert.equal(ttsRes.status, 200, `TTS failed: ${JSON.stringify(ttsRes.data)}`);

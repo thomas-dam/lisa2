@@ -291,7 +291,7 @@ function handleVoiceConfig(req, res) {
   sendJson(res, 200, {
     voice_enabled: voiceConfig.voice_enabled === true,
     sidecar_url: sidecarUrl,
-    default_voice: (voiceConfig.tts || {}).voice || "F1",
+    default_voice: (voiceConfig.tts || {}).voice || "F2",
   });
 }
 
@@ -299,7 +299,7 @@ async function handleVoiceTtsProxy(req, res) {
   try {
     const body = await readRequestJson(req);
     const text = body.text || "";
-    const voice = body.voice || voiceConfig.tts?.voice || "F1";
+    const voice = body.voice || voiceConfig.tts?.voice || "F2";
     const language = body.language || voiceConfig.tts?.language || "en";
 
     if (!text.trim()) {

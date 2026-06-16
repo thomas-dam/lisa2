@@ -542,7 +542,7 @@ async function callTts(text, reqId) {
     // --- Stage 1: Build and send TTS request via same-origin proxy ---
     const ttsBody = JSON.stringify({
       text,
-      voice: "F1",
+      voice: "F2",
       language: "en",
     });
     console.debug(`[VOICE] TTS request:`, {

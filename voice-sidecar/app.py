@@ -56,7 +56,7 @@ asr_provider = WhisperMLXProvider(
 )
 
 tts_provider = SupertonicTTSProvider(
-    voice=tts_cfg.get("voice", "F1"),
+    voice=tts_cfg.get("voice", "F2"),
     speeds=tts_cfg.get("speeds"),
     language=tts_cfg.get("language", "en"),
     fallback_python=os.getenv("SUPERTONIC_PYTHON_BIN"),
@@ -72,7 +72,7 @@ async def health():
         "asr_provider": "whispermlx",
         "asr_model": asr_cfg.get("model", "large-v3"),
         "tts_provider": "supertonic",
-        "tts_voice": tts_cfg.get("voice", "F1"),
+        "tts_voice": tts_cfg.get("voice", "F2"),
     }
 
 
@@ -112,7 +112,7 @@ async def transcribe_audio(
 @app.post("/api/tts")
 async def synthesize_speech(
     text: str = Form(...),
-    voice: str = Form(default=tts_cfg.get("voice", "F1")),
+    voice: str = Form(default=tts_cfg.get("voice", "F2")),
     language: str = Form(default=tts_cfg.get("language", "en")),
 ):
     if not text.strip():
@@ -160,6 +160,6 @@ async def startup():
     port = sidecar_cfg.get("port", 3330)
     print(f"Lisa Voice Sidecar starting on http://{host}:{port}")
     print(f"  ASR: whispermlx ({asr_cfg.get('model', 'large-v3')})")
-    print(f"  TTS: supertonic ({tts_cfg.get('voice', 'F1')})")
+    print(f"  TTS: supertonic ({tts_cfg.get('voice', 'F2')})")
     print(f"  Tmp dir: {tmp_dir}")
     print(f"  Output dir: {output_dir}")

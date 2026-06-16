@@ -28,7 +28,7 @@ class SupertonicTTSProvider:
     def __init__(
         self,
         *,
-        voice: str = "F1",
+        voice: str = "F2",
         speeds: dict[str, float] | None = None,
         language: str = "en",
         fallback_python: str | None = None,
@@ -36,7 +36,7 @@ class SupertonicTTSProvider:
     ) -> None:
         self.voice = voice
         self.language = language
-        self.speeds = speeds or {"F1": 1.05, "F2": 1.0, "M1": 1.0, "M2": 1.0}
+        self.speeds = speeds or {"F2": 1.05, "F1": 1.0, "M1": 1.0, "M2": 1.0}
         self.auto_download = auto_download
         self._tts = None
         self._styles: dict[str, Any] = {}
