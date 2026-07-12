@@ -9,6 +9,9 @@ const imageInput = document.querySelector("#imageInput");
 const attachmentTray = document.querySelector("#attachmentTray");
 const statusText = document.querySelector("#statusText");
 const modelInput = document.querySelector("#modelInput");
+const apiKeyInput = document.querySelector("#apiKeyInput");
+const saveSettingsButton = document.querySelector("#saveSettingsButton");
+const apiKeyStatus = document.querySelector("#apiKeyStatus");
 const micButton = document.querySelector("#micButton");
 const speakToggle = document.querySelector("#speakToggle");
 const voiceToggleRow = document.querySelector(".voice-toggle-row");
@@ -134,34 +137,37 @@ function resetChat() {
   });
 }
 
-async function loadConfig() {
-  const fallbackModel = "Lisa-The-Bot:latest";
+async function loadSettings() {
+  const fallbackModel = "openai/gpt-4.1-mini";
   try {
-    const [configRes, modelsRes] = await Promise.all([
-      fetch("/api/config"),
-      fetch("/api/models")
-    ]);
-
-    const config = configRes.ok ? await configRes.json() : {};
-    const modelsData = modelsRes.ok ? await modelsRes.json() : {};
-
-    const defaultModel = config.model || fallbackModel;
-    const models = Array.isArray(modelsData.models) && modelsData.models.length > 0
-      ? modelsData.models
-      : [defaultModel];
-
-    if (!models.includes(defaultModel)) models.unshift(defaultModel);
-
-    modelInput.innerHTML = "";
-    for (const name of models) {
-      const opt = document.createElement("option");
-      opt.value = name;
-      opt.textContent = name;
-      if (name === defaultModel) opt.selected = true;
-      modelInput.append(opt);
-    }
+    const response = await fetch("/api/settings");
+    if (!response.ok) throw new Error("Could not load settings.");
+    const settings = await response.json();
+    modelInput.value = settings.model || fallbackModel;
+    apiKeyStatus.textContent = settings.apiKeyConfigured ? "API key configured" : "No API key configured";
   } catch {
-    modelInput.innerHTML = `<option value="${fallbackModel}">${fallbackModel}</option>`;
+    modelInput.value = fallbackModel;
+    apiKeyStatus.textContent = "Could not load settings";
+  }
+}
+
+async function saveSettings() {
+  saveSettingsButton.disabled = true;
+  try {
+    const response = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: modelInput.value.trim(), apiKey: apiKeyInput.value.trim() })
+    });
+    const settings = await response.json();
+    if (!response.ok) throw new Error(settings.error || "Could not save settings.");
+    apiKeyInput.value = "";
+    apiKeyStatus.textContent = settings.apiKeyConfigured ? "API key configured" : "No API key configured";
+    setStatus(`Ready (${settings.model})`);
+  } catch (error) {
+    setStatus(error.message);
+  } finally {
+    saveSettingsButton.disabled = false;
   }
 }
 
@@ -745,7 +751,9 @@ async function loadVoiceConfig() {
   }
 }
 
-await loadConfig();
+saveSettingsButton.addEventListener("click", () => { void saveSettings(); });
+
+await loadSettings();
 await loadVoiceConfig();
 resizeInput();
 input.focus();

@@ -1,13 +1,16 @@
 import { createServer } from "node:http";
-import { readFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createHistory, chatTurn, createRetriever, createFullRetriever, loadReference, createOllamaChat, fetchUrlWithFirecrawl, extractUrlFromTurn } from "./lisa-chat.js";
+import { createHistory, chatTurn, createRetriever, createFullRetriever, loadReference, loadPersona, createOpenRouterChat } from "./lisa-chat.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(__dirname, "public");
 const configDir = join(__dirname, "..", "config");
 const VOICE_CONFIG_PATH = join(configDir, "voice.json");
+const PERSONA_PATH = process.env.LISA_PERSONA_PATH || join(__dirname, "..", "spec", "lisa.md");
+const OPENROUTER_SETTINGS_PATH = join(configDir, "openrouter.json");
+const DEFAULT_OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-4.1-mini";
 
 let voiceConfig = { voice_enabled: false };
 
@@ -29,33 +32,27 @@ function nextReqId() {
 
 const PORT = Number(process.env.PORT || 3320);
 const HOST = process.env.HOST || "127.0.0.1";
-const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "Lisa-The-Bot:latest";
-const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY || "";
 const SYSTEM_PROMPT_OVERRIDE = process.env.SYSTEM_PROMPT || "";
 
-async function fetchModelSystemPrompt() {
+async function loadOpenRouterSettings() {
+  const defaults = { apiKey: process.env.OPENROUTER_API_KEY || "", model: DEFAULT_OPENROUTER_MODEL };
   try {
-    const res = await fetch(`${OLLAMA_URL}/api/show`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: OLLAMA_MODEL }),
-    });
-    if (!res.ok) {
-      console.log(`[persona] Ollama /api/show returned ${res.status}`);
-      return "";
-    }
-    const data = await res.json();
-    if (data.system) {
-      console.log(`[persona] loaded system prompt from Ollama model (${data.system.length} chars)`);
-      return data.system;
-    }
-    console.log("[persona] model has no system prompt in Modelfile");
-    return "";
-  } catch (error) {
-    console.log(`[persona] could not fetch system prompt from Ollama: ${error.message}`);
-    return "";
+    const saved = JSON.parse(await readFile(OPENROUTER_SETTINGS_PATH, "utf8"));
+    return {
+      apiKey: String(saved.apiKey || defaults.apiKey).trim(),
+      model: String(saved.model || defaults.model).trim() || defaults.model
+    };
+  } catch {
+    return defaults;
   }
+}
+
+async function saveOpenRouterSettings(settings) {
+  await mkdir(configDir, { recursive: true });
+  const temporaryPath = `${OPENROUTER_SETTINGS_PATH}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
+  await chmod(temporaryPath, 0o600);
+  await rename(temporaryPath, OPENROUTER_SETTINGS_PATH);
 }
 
 const contentTypes = new Map([
@@ -73,7 +70,7 @@ let visualRetriever = null;
 let zImageRetriever = null;
 let visualSections = null;
 let zImageSections = null;
-let ollemaChat = null;
+let modelChat = null;
 let lastGeneratedPrompt = null;
 
 async function tryLoadReference(path, label) {
@@ -104,7 +101,10 @@ function parseCommand(text) {
 
 // Initialize on startup
 async function initializeChat() {
-  personaText = SYSTEM_PROMPT_OVERRIDE ? SYSTEM_PROMPT_OVERRIDE.trim() : await fetchModelSystemPrompt();
+  personaText = await loadPersona({
+    override: SYSTEM_PROMPT_OVERRIDE,
+    path: PERSONA_PATH
+  });
   history = createHistory(personaText);
   const visualResult = await tryLoadReference(join(__dirname, "visual-reference.md"), "visual");
   visualRetriever = visualResult.retriever;
@@ -113,7 +113,7 @@ async function initializeChat() {
   zImageRetriever = zResult.retriever;
   zImageSections = zResult.sections;
 
-  ollemaChat = createOllamaChat({ url: OLLAMA_URL, model: OLLAMA_MODEL });
+  modelChat = createOpenRouterChat({ getSettings: loadOpenRouterSettings });
 }
 
 function sendJson(res, statusCode, payload) {
@@ -138,16 +138,6 @@ async function readRequestJson(req) {
   return raw ? JSON.parse(raw) : {};
 }
 
-function buildFetchUrl() {
-  return FIRECRAWL_API_KEY
-    ? async (userTurn) => {
-        const url = extractUrlFromTurn(userTurn);
-        if (!url) return null;
-        return await fetchUrlWithFirecrawl(url, FIRECRAWL_API_KEY);
-      }
-    : null;
-}
-
 async function handleChat(req, res, reqId) {
   try {
     const body = await readRequestJson(req);
@@ -161,7 +151,6 @@ async function handleChat(req, res, reqId) {
       return;
     }
 
-    const fetchUrl = buildFetchUrl();
     const command = parseCommand(userContent);
 
     if (command) {
@@ -204,12 +193,12 @@ async function handleChat(req, res, reqId) {
         userTurn: userContent,
         images: userImages,
         loadSection,
-        fetchUrl,
-        chat: ollemaChat
+        chat: modelChat
       });
 
       lastGeneratedPrompt = reply;
-      const bytes = sendJson(res, 200, { reply, model: OLLAMA_MODEL, historyLength: history.length });
+      const settings = await loadOpenRouterSettings();
+      const bytes = sendJson(res, 200, { reply, model: settings.model, historyLength: history.length });
       console.log(`[DIAG-REQ] ${reqId} END status=200 bytes=${bytes}`);
       return;
     }
@@ -220,13 +209,13 @@ async function handleChat(req, res, reqId) {
       userTurn: userContent,
       images: userImages,
       loadSection: visualRetriever,
-      fetchUrl,
-      chat: ollemaChat
+      chat: modelChat
     });
 
+    const settings = await loadOpenRouterSettings();
     const bytes = sendJson(res, 200, {
       reply,
-      model: OLLAMA_MODEL,
+      model: settings.model,
       historyLength: history.length
     });
     console.log(`[DIAG-REQ] ${reqId} END status=200 bytes=${bytes}`);
@@ -235,7 +224,7 @@ async function handleChat(req, res, reqId) {
       error:
         error instanceof SyntaxError
           ? "Invalid JSON request."
-          : "Could not reach the local model server.",
+          : "OpenRouter chat request failed.",
       detail: error.message
     });
     console.log(`[DIAG-REQ] ${reqId} CATCH status=500 bytes=${bytes} err=${error.message}`);
@@ -257,26 +246,25 @@ async function handleSave(req, res) {
   }
 }
 
-function handleConfig(res) {
-  sendJson(res, 200, {
-    model: OLLAMA_MODEL,
-    ollamaUrl: OLLAMA_URL
-  });
+async function handleSettingsGet(res) {
+  const settings = await loadOpenRouterSettings();
+  sendJson(res, 200, { apiKeyConfigured: Boolean(settings.apiKey), model: settings.model });
 }
 
-async function handleModels(res) {
-  try {
-    const response = await fetch(`${OLLAMA_URL}/api/tags`);
-    if (!response.ok) {
-      sendJson(res, 502, { error: "Could not fetch models from Ollama." });
-      return;
-    }
-    const data = await response.json();
-    const models = (data.models || []).map((m) => m.name).sort();
-    sendJson(res, 200, { models });
-  } catch {
-    sendJson(res, 502, { error: "Could not reach Ollama." });
+async function handleSettingsUpdate(req, res) {
+  const body = await readRequestJson(req);
+  const current = await loadOpenRouterSettings();
+  const model = String(body.model || "").trim();
+  if (!model || model.length > 200) {
+    sendJson(res, 400, { error: "Enter a valid OpenRouter model slug." });
+    return;
   }
+  const settings = {
+    apiKey: body.clearApiKey ? "" : (String(body.apiKey || "").trim() || current.apiKey),
+    model
+  };
+  await saveOpenRouterSettings(settings);
+  sendJson(res, 200, { apiKeyConfigured: Boolean(settings.apiKey), model: settings.model });
 }
 
 async function handleNewChat(req, res) {
@@ -416,13 +404,13 @@ async function serveStaticFile(req, res, filename, contentType) {
 }
 
 const server = createServer((req, res) => {
-  if (req.method === "GET" && req.url === "/api/config") {
-    handleConfig(res);
+  if (req.method === "GET" && req.url === "/api/settings") {
+    void handleSettingsGet(res);
     return;
   }
 
-  if (req.method === "GET" && req.url === "/api/models") {
-    void handleModels(res);
+  if (req.method === "POST" && req.url === "/api/settings") {
+    void handleSettingsUpdate(req, res);
     return;
   }
 
@@ -495,5 +483,5 @@ await loadVoiceConfig();
 
 server.listen(PORT, HOST, () => {
   console.log(`Standalone bot listening on http://${HOST}:${PORT}`);
-  console.log(`Using Ollama model ${OLLAMA_MODEL} at ${OLLAMA_URL}`);
+  console.log(`Using OpenRouter for chat (settings: ${OPENROUTER_SETTINGS_PATH})`);
 });
