@@ -19,7 +19,7 @@ npm start
 
 Open `http://127.0.0.1:3320`.
 
-By default the server calls Ollama at `http://127.0.0.1:11434` with model `Lisa-The-Bot:latest` — a custom Modelfile personality built on `hf.co/llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-GGUF:Q4_K_S` with vision capabilities.
+The server calls OpenRouter for chat. On first use, enter an OpenRouter API key and model slug in the sidebar. The default model is `openai/gpt-4.1-mini`.
 
 Stop it with `Ctrl-C` in the terminal that launched it.
 
@@ -46,28 +46,16 @@ The background helper writes `server.log` and `.server.pid`, but the normal work
 ## Configuration
 
 ```sh
-PORT=3320 OLLAMA_URL=http://127.0.0.1:11434 OLLAMA_MODEL=Lisa-The-Bot:latest npm start
+PORT=3320 OPENROUTER_API_KEY=sk-or-v1-example OPENROUTER_MODEL=openai/gpt-4.1-mini npm start
 ```
 
-You can also change the model from the app sidebar dropdown (populated from your installed Ollama models) before sending a message.
+You can change the key and model slug from the app sidebar. Saved settings live in the gitignored `config/openrouter.json`; the API never returns the saved key.
 
-The persona is defined entirely by the `Lisa-The-Bot` Modelfile. The server sends no system message by default. To deliberately override the Modelfile persona, set `SYSTEM_PROMPT`:
+The canonical persona is `spec/lisa.md` and is sent as the first system message. To deliberately override it for development, set `SYSTEM_PROMPT`:
 
 ```sh
 SYSTEM_PROMPT="You are Lisa. Warm, dry, confident. Keep replies short." npm start
 ```
-
-## URL Fetching
-
-When a user message contains a URL, the bot automatically fetches the page content using Firecrawl. The fetched text and any images found on the page are injected as ephemeral context into that one reply only — never stored in chat history.
-
-Set a Firecrawl API key to enable URL fetching:
-
-```sh
-FIRECRAWL_API_KEY=fc-your-key npm start
-```
-
-Without a key, URL detection still works but gracefully degrades (no fetch performed). The bot works fine without it.
 
 ## Tests
 
@@ -75,4 +63,4 @@ Without a key, URL detection still works but gracefully degrades (no fetch perfo
 npm test
 ```
 
-Runs the message-assembly acceptance test (no Ollama needed). See `lisa-chat.js` for the persistent/ephemeral split: retrieved reference text is injected per call and never stored in conversation history.
+Runs the provider, persona, routing, and message-assembly tests without making live OpenRouter calls. See `lisa-chat.js` for the persistent/ephemeral split: retrieved reference text is injected per call and never stored in conversation history.

@@ -10,7 +10,7 @@
     "serve:https": "tailscale serve --bg --yes --https=3320 3320",
     "serve:off": "tailscale serve --yes --https=3320 off",
     "check": "node --check server.js",
-    "test": "node test-assembly.js"
+    "test": "node test-assembly.js && node test-routing.js && node test-persona.js && node test-openrouter.js"
   },
   "engines": {
     "node": ">=18"

@@ -41,7 +41,7 @@ const SCRIPT = [
   "Thanks for that.",
   "What about tailscale serve?", // retrieval: tailscale
   "Got it.",
-  "Anything else I should know?"
+  "Read this normally: https://example.com/path?item=1#details"
 ];
 
 function fail(msg) {
@@ -113,6 +113,10 @@ async function main() {
   if (recordedCalls.length !== SCRIPT.length) {
     fail(`expected ${SCRIPT.length} recorded calls, got ${recordedCalls.length}`);
   }
+  const finalUserMessage = recordedCalls.at(-1)?.at(-1);
+  if (finalUserMessage?.role !== "user" || finalUserMessage.content !== SCRIPT.at(-1)) {
+    fail("ordinary URL text was not preserved in the model call");
+  }
 
   // For each retrieval turn, the section content MUST be in the call array.
   // We check for sentinels which are guaranteed to be in reference sections.
@@ -151,7 +155,7 @@ async function main() {
   if (noSystemHistory.length !== 0) {
     fail("createHistory with empty persona should return empty array");
   }
-  const noSystemCall = assembleCall(noSystemHistory, "test turn", null, null);
+  const noSystemCall = assembleCall(noSystemHistory, "test turn", null);
   const hasSystemMessage = noSystemCall.some((m) => m.role === "system");
   if (hasSystemMessage) {
     fail("assembleCall with empty history must not produce a system message");

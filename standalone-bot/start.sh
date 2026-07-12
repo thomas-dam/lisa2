@@ -7,7 +7,7 @@ HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-3320}"
 LOG_FILE="${LOG_FILE:-server.log}"
 PID_FILE="${PID_FILE:-.server.pid}"
-URL="http://$HOST:$PORT/api/config"
+URL="http://$HOST:$PORT/api/settings"
 
 if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
   echo "Standalone bot already running at http://$HOST:$PORT"

@@ -45,8 +45,7 @@ Responsibilities:
 * receive user turns
 * call Lisa chat logic
 * manage runtime routes
-* connect to Ollama
-* connect to Firecrawl
+* connect to OpenRouter
 * expose voice config
 * serve frontend assets
 
@@ -63,9 +62,8 @@ lisa-chat.js
 Responsibilities:
 
 * own persistent conversation history
-* assemble Ollama message payloads
+* assemble provider-neutral chat history and OpenRouter message payloads
 * inject ephemeral retrieval context
-* inject ephemeral URL fetch context
 * manage command-specific context
 * prevent retrieved/tool content from becoming persistent memory
 
@@ -75,45 +73,25 @@ lisa-chat.js is the owner of persistent chat history.
 
 ⸻
 
-4. Ollama Model
-
-Model:
-
-Lisa-The-Bot:latest
+4. Persona and Model Provider
 
 Responsibilities:
 
-* Lisa persona
-* voice/personality
-* conversational behavior
-* character tone
+* `spec/lisa.md` owns Lisa's identity, voice, and behavioral boundaries
+* OpenRouter supplies replaceable conversational models
+* `config/openrouter.json` stores the local API key and selected model and is gitignored
 
-The Ollama Modelfile is external to this repo.
-
-Repo code must not assume it can edit the Modelfile.
-
-The server must not inject a default persona system prompt.
-
-Optional system prompts may exist only through explicit configuration such as SYSTEM_PROMPT.
+The application loads the checked-in persona as the first persistent system message. `SYSTEM_PROMPT` is an explicit development override; provider models do not own Lisa's identity.
 
 ⸻
 
 Runtime Services
 
-Ollama
+OpenRouter
 
-Default URL:
+Endpoint: `https://openrouter.ai/api/v1/chat/completions`
 
-http://127.0.0.1:11434
-
-Used for:
-
-* local inference
-* Lisa model execution
-
-Required model:
-
-Lisa-The-Bot:latest
+Used for conversational and vision-capable inference. The default model slug is `openai/gpt-4.1-mini` and can be changed in the browser. The API key remains server-side.
 
 ⸻
 
@@ -174,10 +152,6 @@ Start full stack:
 Stop bot and voice:
 
 ./stop-lisa.sh
-
-Stop bot, voice, and Ollama:
-
-./stop-lisa.sh –with-ollama
 
 Status:
 
@@ -318,8 +292,6 @@ Persistent:
 Ephemeral:
 
 * retrieved reference sections
-* URL fetched content
-* Firecrawl content
 * tool output
 * previous prompt injection for iteration
 * diagnostic context
@@ -327,23 +299,6 @@ Ephemeral:
 Hard invariant:
 
 Ephemeral context may influence one model call, but must not become persistent history.
-
-⸻
-
-URL Fetching
-
-Lisa can fetch specific URLs using Firecrawl when URLs appear in user messages.
-
-Purpose:
-
-* read specific pages
-* avoid broad web search
-
-Fetched content is ephemeral.
-
-Fetched content must not persist into history.
-
-Large page handling should avoid overwhelming context.
 
 ⸻
 

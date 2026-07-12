@@ -7,6 +7,27 @@
 
 import { readFile } from "node:fs/promises";
 
+// Load Lisa's checked-in persona without making the runtime depend on a
+// particular model's Modelfile. An explicit override remains available for
+// controlled experiments.
+export async function loadPersona({ override = "", path, log = console.log }) {
+  if (override.trim()) {
+    log(`[persona] using explicit SYSTEM_PROMPT override (${override.trim().length} chars)`);
+    return override.trim();
+  }
+
+  try {
+    const persona = (await readFile(path, "utf8")).trim();
+    if (persona) {
+      log(`[persona] loaded canonical repo persona (${persona.length} chars)`);
+      return persona;
+    }
+    throw new Error("Canonical persona file is empty.");
+  } catch (error) {
+    throw new Error(`Could not load canonical repo persona: ${error.message}`, { cause: error });
+  }
+}
+
 // --- Reference retrieval (v1: keyword -> section) ---
 //
 // Flat reference file. Each section starts with a header line listing its
@@ -75,14 +96,12 @@ export function createHistory(persona) {
 //
 //   call = [system(persona)]
 //        + ([context(retrieved_section)] for each section in retrievedSections)
-//        + ([context(fetched_page)] if fetched_page else [])
 //        + persistent_history[1:]
 //        + [user_turn]
-//        + ([image_urls] if fetched_page.images else [])
 //
 // retrievedSections is a string, string[], or null.
 // The context messages are ephemeral: they live only in the returned array.
-export function assembleCall(history, userTurn, retrievedSections, fetchedPage, images) {
+export function assembleCall(history, userTurn, retrievedSections, images) {
   const hasPersona = history.length > 0 && history[0].role === "system";
   const persona = hasPersona ? history[0] : null;
   const dialogue = hasPersona ? history.slice(1) : history;
@@ -96,7 +115,6 @@ export function assembleCall(history, userTurn, retrievedSections, fetchedPage, 
   const messages = [
     ...(persona ? [persona] : []),
     ...sections.map((s) => ({ role: "system", content: contextMessage(s) })),
-    ...(fetchedPage ? [{ role: "system", content: contextMessage(fetchedPage.markdown) }] : []),
     ...dialogue,
     userMsg
   ];
@@ -115,17 +133,14 @@ function estimateTokens(text) {
 // --- One conversational turn ---
 //
 // Mutates `history` by appending ONLY the user turn and the reply. The
-// retrieved section and fetched page content are used to build the call and then discarded.
-export async function chatTurn({ history, userTurn, images, loadSection, fetchUrl, chat, log = defaultLog }) {
+// retrieved sections are used to build the call and then discarded.
+export async function chatTurn({ history, userTurn, images, loadSection, chat, log = defaultLog }) {
   const retrieved = loadSection ? loadSection(userTurn) : null;
   const retrievedTexts = retrieved
     ? (Array.isArray(retrieved) ? retrieved.map((r) => r.text) : [retrieved.text])
     : [];
 
-  const fetchedPage = fetchUrl ? await fetchUrl(userTurn) : null;
-  const fetchedText = fetchedPage ? fetchedPage.markdown : null;
-
-  const call = assembleCall(history, userTurn, retrievedTexts.length > 0 ? retrievedTexts : null, fetchedPage, images);
+  const call = assembleCall(history, userTurn, retrievedTexts.length > 0 ? retrievedTexts : null, images);
   const reply = await chat(call);
 
   // INVARIANT: never append retrievedTexts or fetchedText. Never duplicate the system message.
@@ -136,10 +151,7 @@ export async function chatTurn({ history, userTurn, images, loadSection, fetchUr
     retrievalFired: retrievedTexts.length > 0,
     section: retrieved && !Array.isArray(retrieved) ? retrieved.keyword : null,
     sections: Array.isArray(retrieved) ? retrieved.map((r) => r.keyword).join(",") : null,
-    urlFetched: Boolean(fetchedPage),
-    fetchedUrl: fetchedPage ? fetchedPage.url : null,
-    ephemeralTokens: retrievedTexts.reduce((t, s) => t + estimateTokens(contextMessage(s)), 0) +
-                      (fetchedText ? estimateTokens(contextMessage(fetchedText)) : 0),
+    ephemeralTokens: retrievedTexts.reduce((t, s) => t + estimateTokens(contextMessage(s)), 0),
     historyLen: history.length
   });
 
@@ -150,79 +162,55 @@ function defaultLog(entry) {
   const parts = [
     `retrieval=${entry.retrievalFired ? "yes" : "no"}`,
     `section=${entry.section ?? entry.sections ?? "-"}`,
-    `url_fetched=${entry.urlFetched ? "yes" : "no"}`,
-    `fetched_url=${entry.fetchedUrl ?? "-"}`,
     `ephemeral_tokens=${entry.ephemeralTokens}`,
     `history_len=${entry.historyLen}`
   ];
   console.log(`[lisa] ${parts.join(" ")}`);
 }
 
-// --- URL fetching with Firecrawl ---
-//
-// Detects URLs in user text and fetches their content with Firecrawl.
-// Returns { url, markdown, images } if found; null if no URL or fetch fails.
-
-function extractUrl(text) {
-  // Match http:// or https:// URLs
-  const urlPattern = /https?:\/\/[^\s)]+/;
-  const match = String(text).match(urlPattern);
-  return match ? match[0] : null;
+function openRouterMessages(messages) {
+  return messages.map((message) => {
+    if (message.role !== "user" || !Array.isArray(message.images) || message.images.length === 0) {
+      return { role: message.role, content: message.content };
+    }
+    return {
+      role: message.role,
+      content: [
+        { type: "text", text: message.content },
+        ...message.images.map((base64) => ({
+          type: "image_url",
+          image_url: { url: `data:image/jpeg;base64,${base64}` }
+        }))
+      ]
+    };
+  });
 }
 
-export async function fetchUrlWithFirecrawl(url, apiKey) {
-  if (!url || !apiKey) {
-    return null;
-  }
-
-  try {
-    const response = await fetch("https://api.firecrawl.dev/v2/scrape", {
+export function createOpenRouterChat({ getSettings, fetchImpl = fetch }) {
+  return async (messages) => {
+    const { apiKey, model } = await getSettings();
+    if (!apiKey) throw new Error("OpenRouter API key is not configured. Add it in Settings.");
+    const response = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`
+        authorization: `Bearer ${apiKey}`,
+        "content-type": "application/json",
+        "x-openrouter-title": "Lisa Companion"
       },
-      body: JSON.stringify({
-        url,
-        formats: ["markdown", "images"]
-      })
+      body: JSON.stringify({ model, messages: openRouterMessages(messages), stream: false, temperature: 0.7, max_tokens: 900 })
     });
-
+    let data;
+    try { data = await response.json(); } catch {
+      throw new Error(`OpenRouter returned an unreadable response (${response.status}).`);
+    }
     if (!response.ok) {
-      console.error(`[firecrawl] fetch failed: ${response.status}`);
-      return null;
+      const detail = data?.error?.message ? `: ${data.error.message}` : "";
+      throw new Error(`OpenRouter request failed (${response.status})${detail}`);
     }
-
-    const data = await response.json();
-    if (!data.success || !data.data) {
-      console.error("[firecrawl] response missing data");
-      return null;
+    const content = data?.choices?.[0]?.message?.content;
+    if (typeof content !== "string" || !content.trim()) {
+      throw new Error(`OpenRouter returned empty content for ${data?.model || model}.`);
     }
-
-    return {
-      url,
-      markdown: data.data.markdown || "",
-      images: data.data.images || []
-    };
-  } catch (error) {
-    console.error("[firecrawl] error:", error.message);
-    return null;
-  }
-}
-
-export function extractUrlFromTurn(userTurn) {
-  return extractUrl(userTurn);
-}
-
-// --- Real model call (used in production, not in the acceptance test) ---
-export function createOllamaChat({ url, model }) {
-  return async (messages) => {
-    const r = await fetch(`${url}/api/chat`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model, stream: false, messages })
-    });
-    const data = await r.json();
-    return data?.message?.content || "";
+    return content.trim();
   };
 }

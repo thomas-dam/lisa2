@@ -1,6 +1,8 @@
 tmp/
 outputs/
 .runtime/
+config/openrouter.json
+config/openrouter.json.tmp
 voice-sidecar/.venv/
 voice-sidecar/__pycache__/
 .DS_Store

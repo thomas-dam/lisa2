@@ -10,13 +10,19 @@
     <main class="app-shell">
       <aside class="sidebar" aria-label="Conversation controls">
         <div>
-          <p class="eyebrow">Local assistant</p>
-          <h1>Standalone Bot</h1>
+          <p class="eyebrow">Companion</p>
+          <h1>Lisa</h1>
         </div>
         <label class="field">
-          <span>Model</span>
-          <select id="modelInput" name="model"></select>
+          <span>OpenRouter model</span>
+          <input id="modelInput" name="model" type="text" placeholder="openai/gpt-4.1-mini" />
         </label>
+        <label class="field">
+          <span>OpenRouter API key</span>
+          <input id="apiKeyInput" type="password" autocomplete="off" placeholder="Leave blank to keep saved key" />
+        </label>
+        <button id="saveSettingsButton" class="secondary-button" type="button">Save model settings</button>
+        <p id="apiKeyStatus" class="status">No key configured</p>
         <button id="newChatButton" class="secondary-button" type="button">New chat</button>
         <button id="saveChatButton" class="secondary-button" type="button">Save chat</button>
         <label class="field voice-toggle-row" hidden>
@@ -30,7 +36,7 @@
         <div id="messages" class="messages">
           <article class="message assistant">
             <div class="avatar" aria-hidden="true">AI</div>
-            <div class="bubble">Send a message to start a local conversation.</div>
+            <div class="bubble">Send a message to Lisa.</div>
           </article>
         </div>
 
@@ -42,7 +48,7 @@
               name="message"
               rows="1"
               autocomplete="off"
-              placeholder="Message the bot"
+              placeholder="Message Lisa"
               required
             ></textarea>
             <div class="composer-actions">

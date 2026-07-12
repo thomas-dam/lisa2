@@ -12,7 +12,7 @@ import { loadReference, createRetriever, createFullRetriever, createHistory, cha
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
-const VISUAL_MARKER = "Korean female";
+const VISUAL_MARKER = "Korean woman, 29";
 const ZIMAGE_MARKER_1 = "dense descriptive paragraphs";
 const ZIMAGE_MARKER_2 = "50mm f/1.4";
 
