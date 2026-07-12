@@ -2,6 +2,29 @@
 
 Date: 2026-07-12
 
+## Starting a New Architect Chat
+
+Before proposing work, read these repository sources in order:
+
+1. [`spec/lisa.md`](spec/lisa.md)
+2. [`spec/runtime.md`](spec/runtime.md)
+3. [`docs/architect-working-agreement.md`](docs/architect-working-agreement.md)
+4. [`AGENTS.md`](AGENTS.md), the Codex agent-guidance document
+5. [`ARCHITECTURE.md`](ARCHITECTURE.md), the current architecture document
+6. [`ARCHITECT_MIGRATION_REPORT.md`](ARCHITECT_MIGRATION_REPORT.md), the latest active handover and this document
+
+Repository content takes precedence over reconstructed chat memory.
+
+### Immediate unresolved topic
+
+- Lisa currently uses `qwen/qwen3-vl-32b-instruct`.
+- Vision works through OpenRouter.
+- Grounded internet access is not yet established.
+- Firecrawl has been removed.
+- The earlier precise weather response remains unexplained.
+- No internet implementation decision has been made.
+- The next Architect chat must review the current evidence before proposing architecture or a Codex task.
+
 ## Decision
 
 The repositories have unrelated Git histories and incompatible application shells, so they were not merged. The newer `lisa2` architecture remains the base. The intended changes from `lisa` were reimplemented in it: repository-owned persona management and OpenRouter-based conversational model management.
