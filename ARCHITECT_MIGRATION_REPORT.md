@@ -2,16 +2,21 @@
 
 Date: 2026-07-12
 
+> **Historical document.** This report captures the state of the lisa-to-lisa2 migration at the time it was written. It is not live operational state.
+>
+> For the active handover, read [`ARCHITECT_HANDOVER.md`](ARCHITECT_HANDOVER.md). For current architecture, read [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`spec/runtime.md`](spec/runtime.md). Current work must use the handover and current specifications rather than treating this migration report as live operational state.
+
 ## Starting a New Architect Chat
 
 Before proposing work, read these repository sources in order:
 
-1. [`spec/lisa.md`](spec/lisa.md)
-2. [`spec/runtime.md`](spec/runtime.md)
-3. [`docs/architect-working-agreement.md`](docs/architect-working-agreement.md)
-4. [`AGENTS.md`](AGENTS.md), the Codex agent-guidance document
-5. [`ARCHITECTURE.md`](ARCHITECTURE.md), the current architecture document
-6. [`ARCHITECT_MIGRATION_REPORT.md`](ARCHITECT_MIGRATION_REPORT.md), the latest active handover and this document
+1. [`ARCHITECT_HANDOVER.md`](ARCHITECT_HANDOVER.md) — the active handover and cold-start validation
+2. [`spec/lisa.md`](spec/lisa.md)
+3. [`spec/runtime.md`](spec/runtime.md)
+4. [`docs/architect-working-agreement.md`](docs/architect-working-agreement.md)
+5. [`AGENTS.md`](AGENTS.md), the Codex agent-guidance document
+6. [`ARCHITECTURE.md`](ARCHITECTURE.md), the current architecture document
+7. [`ARCHITECT_MIGRATION_REPORT.md`](ARCHITECT_MIGRATION_REPORT.md), this historical document
 
 Repository content takes precedence over reconstructed chat memory.
 

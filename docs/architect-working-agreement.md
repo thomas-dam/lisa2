@@ -67,3 +67,11 @@ The Architect must challenge and correct its own assumptions. A plausible explan
 - Architecture decisions should be documented before implementation.
 - Codex summaries do not equal acceptance.
 - No implementation should silently redefine Lisa's identity or architecture.
+
+## Recovery and Handover
+
+- The repository must remain recoverable at all times. A new Architect must be able to reconstruct the current state from repository documents alone, without chat history.
+- [`ARCHITECT_HANDOVER.md`](../ARCHITECT_HANDOVER.md) must be maintained as work progresses. It is the active operational handover document.
+- The handover should be updated after meaningful architectural decisions or implementation acceptance.
+- The process must not rely on a graceful end-of-chat summary. Unexpected interruption is a normal recovery scenario, not an exceptional one.
+- A new Architect must pass the cold-start validation defined in `ARCHITECT_HANDOVER.md` before continuing work. The first deliverable is a state reconstruction, not an implementation proposal.

@@ -91,7 +91,7 @@ OpenRouter
 
 Endpoint: `https://openrouter.ai/api/v1/chat/completions`
 
-Used for conversational and vision-capable inference. The default model slug is `openai/gpt-4.1-mini` and can be changed in the browser. The API key remains server-side.
+Used for conversational and vision-capable inference. The code-default model slug is `openai/gpt-4.1-mini` (`server.js:13`), overridable in the browser. The currently configured model (in local gitignored `config/openrouter.json`) is `qwen/qwen3-vl-32b-instruct`. The model is loaded per-call, so changes do not require a restart. The API key remains server-side.
 
 ⸻
 
@@ -124,7 +124,7 @@ Known providers:
 
 * ASR: whispermlx
 * TTS: supertonic
-* default voice: F1
+* default voice: F2
 
 TTS endpoint expects:
 
@@ -326,9 +326,13 @@ Known-good layers:
 * WAV serving
 * manual playback
 
-Current unresolved area:
+Current status:
 
-* GUI chat to browser playback path
+* GUI chat to browser playback path: implemented and user-confirmed working
+* Uses Web Audio API (`AudioContext.decodeAudioData` + `BufferSource`), primed on user gesture
+* Same-origin proxy avoids mixed-content blocking
+
+Do not re-debug proven-good layers unless new evidence appears.
 
 ⸻
 
@@ -342,7 +346,7 @@ Tests should verify that useful context reaches the model, not only that content
 
 Operational Invariants
 
-1. No default system prompt overrides Lisa’s Modelfile.
+1. No default system prompt overrides Lisa’s canonical persona in `spec/lisa.md`. `SYSTEM_PROMPT` is an explicit development override only.
 2. lisa-chat.js owns persistent history.
 3. Browser does not own conversation history.
 4. Retrieved content is ephemeral.
@@ -354,27 +358,20 @@ Operational Invariants
 
 ⸻
 
-Current Open Issue
+Resolved Issue: Voice from GUI Chat
 
-Lisa does not yet produce audible voice from normal GUI chat.
+Lisa now produces audible voice from normal GUI chat. This was resolved by implementing `callTts()` in `app.js` using the Web Audio API (`AudioContext.decodeAudioData` + `BufferSource`), with the `AudioContext` primed on user gesture to satisfy autoplay policies. Same-origin proxy routes (`/api/voice/tts`, `/api/voice/audio/*`) avoid mixed-content blocking.
 
-Known good:
+All layers are proven good:
 
 * voice sidecar reachable
 * /api/tts works manually
 * audio URL returned
 * WAV file served
 * manual playback works
+* GUI chat → TTS proxy → audio proxy → AudioContext playback → speaker (user-confirmed)
 
-Remaining investigation area:
-
-* frontend browser path
-* app.js voice invocation
-* sidecar URL generation
-* mixed content / host mismatch
-* browser autoplay/playback errors
-
-Do not re-debug proven-good lower layers unless new evidence appears.
+Do not re-debug proven-good layers unless new evidence appears.
 
 ⸻
 
@@ -453,7 +450,6 @@ Lisa today:
 * local companion
 * image prompting
 * voice
-* URL reading
 
 Future persona example:
 
