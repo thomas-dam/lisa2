@@ -12,7 +12,7 @@ The repositories have unrelated Git histories and incompatible application shell
 - The local voice sidecar remains on port 3330.
 - OpenRouter replaces Ollama for chat and vision inference.
 - `spec/lisa.md` replaces the external Ollama Modelfile as the canonical identity source.
-- Existing persistent/ephemeral message separation, reference retrieval, URL fetching, image commands, browser image attachments, chat export, and voice proxying are retained.
+- Existing persistent/ephemeral message separation, reference retrieval, image commands, browser image attachments, chat export, and voice proxying are retained.
 - Startup, status, and shutdown scripts no longer start, inspect, require, or stop Ollama.
 
 ## Provider contract

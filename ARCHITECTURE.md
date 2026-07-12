@@ -346,12 +346,11 @@ Operational Invariants
 2. lisa-chat.js owns persistent history.
 3. Browser does not own conversation history.
 4. Retrieved content is ephemeral.
-5. URL fetched content is ephemeral.
-6. Z-Image skill does not load during normal chat.
-7. Voice starts with normal Lisa startup.
-8. Startup state must be managed and observable.
-9. Logs and PIDs must match actual running services.
-10. Unmanaged processes must be reported clearly.
+5. Z-Image skill does not load during normal chat.
+6. Voice starts with normal Lisa startup.
+7. Startup state must be managed and observable.
+8. Logs and PIDs must match actual running services.
+9. Unmanaged processes must be reported clearly.
 
 ⸻
 

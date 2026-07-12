@@ -143,7 +143,7 @@ export async function chatTurn({ history, userTurn, images, loadSection, chat, l
   const call = assembleCall(history, userTurn, retrievedTexts.length > 0 ? retrievedTexts : null, images);
   const reply = await chat(call);
 
-  // INVARIANT: never append retrievedTexts or fetchedText. Never duplicate the system message.
+  // INVARIANT: never append retrievedTexts. Never duplicate the system message.
   history.push({ role: "user", content: userTurn });
   history.push({ role: "assistant", content: reply });
 
