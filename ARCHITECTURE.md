@@ -1,465 +1,269 @@
-ARCHITECTURE.md
+# Lisa2 Architecture
 
-Lisa2 Architecture
+## Product boundary
 
-Lisa2 is a local-first companion system built around a clear separation of character, skills, tools, runtime state, and external services.
+Lisa2 is a local-first companion system built for Lisa. Lisa is the product; this repository is not pursuing a catalogue of characters.
 
-The system should remain modular enough that Lisa can be replaced by another persona without rewriting the engine.
+The runtime must nevertheless keep persona, knowledge, conversation state, tools, model providers, speech recognition, speech synthesis, and voice creation behind clear boundaries. A component should be replaceable without redefining Lisa or rewriting unrelated parts of the system.
 
-⸻
+The browser chat is Lisa's sole user-facing interface. The browser communicates with the Lisa server; the server coordinates internal providers, sidecars, memory, tools, and external engines. Internal component boundaries must remain invisible to the user unless status or intervention is genuinely useful.
 
-Current Core Components
+The primary delivery goal is a fast, low-friction path from user intent to a useful result in the browser conversation.
 
-1. Browser UI
+### Product principles
 
-Location:
+- Prefer a coherent, useful Lisa over novelty or maximum system complexity.
+- Keep durable identity, knowledge, and workflows under local control where practical.
+- Treat cloud providers and model families as replaceable execution layers.
+- Grow capability through focused knowledge and tools rather than one expanding system prompt.
+- Keep internal operational complexity out of the browser experience.
+- Prefer one trusted launch, stop, status, and logging path.
+- Respect local hardware and memory pressure when combining models and services.
 
-public/
+## Implemented system
+
+### Component overview
+
+Lisa2 currently consists of more than its voice sidecars:
+
+1. Lisa's identity and persona source.
+2. The browser conversation interface.
+3. Node orchestration and HTTP API.
+4. In-memory conversation state and request assembly.
+5. OpenRouter model access.
+6. Ephemeral knowledge retrieval and image-prompt guidance.
+7. Image input and model vision requests.
+8. Speech recognition, speech synthesis, voice selection, and local voice creation.
+9. Configuration, secrets, and runtime lifecycle tooling.
+
+### Browser application
+
+Location: `standalone-bot/public/`
 
 Responsibilities:
 
-* render chat
-* send user messages
-* display assistant replies
-* handle image upload UI
-* handle voice controls
-* request TTS playback
-* export chats
+- Render chat and settings.
+- Send user messages and image attachments.
+- Record microphone input.
+- Request synthesized speech and play returned WAV data with the Web Audio API.
+- Export the current chat.
 
-The browser is display and interaction only.
+The browser does not own canonical conversation history and should not need to know how to reach individual internal services.
 
-It should not own Lisa’s persistent conversation history.
-
-⸻
-
-2. Node Backend
+### Node orchestration server
 
 Main files:
 
-* server.js
-* lisa-chat.js
+- `standalone-bot/server.js`
+- `standalone-bot/lisa-chat.js`
+
+Default address: `http://127.0.0.1:3320`
 
 Responsibilities:
 
-* expose HTTP API
-* receive user turns
-* call Lisa chat logic
-* manage runtime routes
-* connect to OpenRouter
-* expose voice config
-* serve frontend assets
+- Serve the browser application.
+- Expose chat, settings, reset, export, and voice-proxy routes.
+- Load Lisa's persona and local configuration.
+- Assemble model requests.
+- Call the configured OpenRouter model.
+- Expose ASR connection configuration and proxy TTS requests to the local synthesis service.
 
-The backend should remain a thin orchestration layer where practical.
+`lisa-chat.js` owns process-global in-memory dialogue history. The browser sends only the current turn.
 
-⸻
+The implemented direct browser-to-ASR route is a boundary exception, not the intended architecture. ASR should eventually be reached through the Lisa server, as TTS is now.
 
-3. Lisa Chat Core
+### Persona
 
-Main file:
+Canonical source: `spec/lisa.md`
 
-lisa-chat.js
+The server loads the persona at startup and refuses to start if it is missing or empty. `SYSTEM_PROMPT` is an explicit development override.
 
-Responsibilities:
+Lisa's identity does not belong to OpenRouter, a model slug, a voice file, or a provider. Changing any of those components must not silently change the persona.
 
-* own persistent conversation history
-* assemble provider-neutral chat history and OpenRouter message payloads
-* inject ephemeral retrieval context
-* manage command-specific context
-* prevent retrieved/tool content from becoming persistent memory
+### Conversational provider
 
-Hard invariant:
-
-lisa-chat.js is the owner of persistent chat history.
-
-⸻
-
-4. Persona and Model Provider
-
-Responsibilities:
-
-* `spec/lisa.md` owns Lisa's identity, voice, and behavioral boundaries
-* OpenRouter supplies replaceable conversational models
-* `config/openrouter.json` stores the local API key and selected model and is gitignored
-
-The application loads the checked-in persona as the first persistent system message. `SYSTEM_PROMPT` is an explicit development override; provider models do not own Lisa's identity.
-
-⸻
-
-Runtime Services
-
-OpenRouter
+Current provider: OpenRouter chat completions
 
 Endpoint: `https://openrouter.ai/api/v1/chat/completions`
 
-Used for conversational and vision-capable inference. The code-default model slug is `openai/gpt-4.1-mini` (`server.js:13`), overridable in the browser. The currently configured model (in local gitignored `config/openrouter.json`) is `qwen/qwen3-vl-32b-instruct`. The model is loaded per-call, so changes do not require a restart. The API key remains server-side.
+Local settings live in gitignored `config/openrouter.json`. The selected model and API key are loaded for each call, so changing the model does not require restarting the server. The browser can read the selected model and whether a key exists, but the API never returns the saved key.
 
-⸻
+Provider failures are returned as visible errors. There is no silent fallback provider.
 
-Lisa Bot Server
+### Message construction
 
-Default URL:
+Normal provider calls are assembled in this order:
 
-http://127.0.0.1:3320
+1. Lisa's persona.
+2. Request-scoped retrieved or tool context, when applicable.
+3. Existing user/assistant dialogue.
+4. The current user turn and any attached images.
 
-Used for:
+Persistent dialogue:
 
-* browser UI
-* chat API
-* runtime config
-* backend orchestration
+- persona system message,
+- user turns,
+- assistant replies.
 
-⸻
+Request-scoped context:
 
-Voice Sidecar
+- retrieved reference sections,
+- skill instructions,
+- tool results,
+- the previous image prompt used during `/iterate image`.
 
-Default URL:
+Request-scoped context may influence one call but is not appended to dialogue history.
 
-http://127.0.0.1:3330
+### Current knowledge routing
 
-Health endpoint:
+The current retrieval system is deliberately small:
 
-/api/health
+- `standalone-bot/visual-reference.md` contains Lisa's visual reference and may be retrieved during relevant normal chat.
+- `standalone-bot/z-image-reference.md` contains Z-Image prompting guidance.
+- `/create image` loads the image skill and Lisa's visual reference.
+- `/iterate image` loads the image skill, the preceding generated prompt, and Lisa's visual reference only when Lisa remains the subject.
+- Normal chat must not load the Z-Image skill.
+- `standalone-bot/test-reference.md` is a test fixture.
 
-Known providers:
+The former empty `standalone-bot/reference.md` placeholder was removed.
 
-* ASR: whispermlx
-* TTS: supertonic
-* default voice: F2
+### Local voice services
 
-TTS endpoint expects:
+Voice is provider-independent from chat.
 
-application/x-www-form-urlencoded
+#### Speech recognition
 
-Not JSON.
+- Service: WhisperMLX ASR sidecar
+- Source: `voice-sidecar/`
+- Address: `http://127.0.0.1:3330`
+- Health route: `GET /api/health`
+- Transcription route: `POST /api/asr`
 
-Known-good manual TTS flow:
+The browser sends recorded audio directly to the configured ASR sidecar. The sidecar enables CORS for this local browser path.
 
-* POST /api/tts
-* receive audio_url
-* GET /api/audio/
-* play WAV locally
+#### Speech synthesis
 
-⸻
+- Current service: repository-owned MLX Audio adapter
+- Source: `mlx-audio-service/`
+- Address: `http://127.0.0.1:8000`
+- Health route: `GET /health`
+- Synthesis route: `POST /v1/audio/speech`
+- Current voice selection: `rose`
 
-Canonical Runtime Commands
+The Node server sends JSON shaped as:
 
-From repo root:
+`{"input":"Text to speak","voice":"rose"}`
 
-Start full stack:
+The service returns WAV bytes. Node forwards those bytes through the same-origin `POST /api/voice/tts` route, and the browser decodes and plays them.
 
-./start-lisa.sh
+Rose is deployment configuration. Neither Rose nor MLX Audio is a permanent identity dependency.
 
-Stop bot and voice:
+### Runtime operations
 
-./stop-lisa.sh
+Canonical commands from the repository root:
 
-Status:
+- `./start-lisa.sh`
+- `./stop-lisa.sh`
+- `./status-lisa.sh`
+- `./logs-lisa.sh`
 
-./status-lisa.sh
+The root lifecycle scripts manage:
 
-Logs:
+| Service | Port | PID | Log |
+|---|---:|---|---|
+| Bot and browser UI | 3320 | `.runtime/pids/bot.pid` | `.runtime/logs/bot.log` |
+| WhisperMLX ASR | 3330 | `.runtime/pids/voice.pid` | `.runtime/logs/voice.log` |
+| MLX Audio TTS | 8000 | `.runtime/pids/tts.pid` | `.runtime/logs/tts.log` |
 
-./logs-lisa.sh
+`.runtime/` is ignored by Git. Scripts may adopt an already-running process when its expected health route responds and must not claim stale PID files represent live services. Current adoption checks do not validate a service identity field.
 
-The normal Lisa test path must not require manual cd into subdirectories.
+## Architectural invariants
 
-Voice is part of normal Lisa startup.
+1. Lisa's identity remains independent of models, providers, voices, and tools.
+2. Lisa is the product; persona replaceability is a modularity requirement, not a multi-character roadmap.
+3. `lisa-chat.js` owns current dialogue history.
+4. The browser does not own canonical dialogue history.
+5. Retrieved and tool-generated context is request-scoped unless a future memory system explicitly saves it.
+6. Z-Image skill content does not load during normal chat.
+7. Provider errors remain visible.
+8. Secrets remain server-side and outside Git.
+9. Voice services remain independent from the chat provider.
+10. Current engine and voice choices are configuration, not identity.
+11. Operational status must reflect actual processes and health checks.
+12. The browser chat is the only user-facing Lisa interface.
+13. The browser talks to the Lisa server, not directly to internal providers, sidecars, or engines.
+14. Internal capabilities return results to the browser conversation with minimal avoidable latency and interaction overhead.
 
-⸻
+## Known implementation limitations
 
-Runtime Directory
+These are source-backed limitations in the current working tree, not an approved implementation sequence:
 
-All runtime artifacts should live under:
+- Conversation state is one unbounded, process-global, in-memory history shared by all clients and lost on restart.
+- Chat export includes the system persona, cannot be imported, and does not retain attached image data.
+- OpenRouter is the only chat provider; requests are non-streaming and lack timeout, cancellation, and model-capability validation.
+- Knowledge retrieval is first-match keyword substring routing rather than a wiki, index, or durable memory system.
+- Images are visible only in the current request. Image commands write prompts but do not call the separate image-generation engine.
+- The browser calls ASR directly over a loopback URL even though the intended boundary is one browser-to-Lisa-server gateway.
+- ASR, TTS, voice selection, and voice creation do not yet have engine-neutral interfaces.
+- Voice configuration contains fields that are ignored or overridden by browser and server code.
+- Bot-only and full-runtime lifecycle commands overlap and use different PID and log locations.
+- Some user-facing copy still says “Standalone Bot” or “AI.”
 
-.runtime/
+## Documented intent
 
-Current structure:
+### Replaceable voice capability
 
-.runtime/
-├── logs/
-│   ├── bot.log
-│   └── voice.log
-└── pids/
-├── bot.pid
-└── voice.pid
+The intended voice boundary consists of three related but separate capabilities:
 
-.runtime/ is ignored by git.
+1. Text-to-speech generation.
+2. Selection of an existing voice.
+3. Creation or cloning of a voice.
 
-⸻
+The current working tree implements speech synthesis and voice selection through MLX Audio. Voice creation currently exists as a local MLX Audio GUI workflow, not as a stable engine-neutral runtime contract.
 
-Knowledge and Retrieval
+Future voice-cloning implementations may use OmniVoice- or Qwen-family models. No specific model, request schema, storage format, or migration design has been approved.
 
-Current Knowledge Files
+### Grounded internet access
 
-visual-reference.md
+The desired capability is broader than a conventional web-search feature. Possible abilities include opening known pages, following sources, retrieving current information, and using bounded internet tools.
 
-Contains Lisa’s stable visual identity.
+No provider or tool contract is selected. Any design must keep fetched material request-scoped by default, preserve source attribution, and treat external content as untrusted data.
 
-Used for:
+### Wiki-style knowledge and persistent memory
 
-* normal appearance questions
-* image generation involving Lisa
+A candidate direction is an editable wiki or notebook in which knowledge is divided into maintainable pages rather than accumulated in one system prompt.
 
-z-image-reference.md
+Expected use consists largely of conversational bursts of roughly 20–30 minutes. The long-term relationship should not depend on resending complete old conversations. A future memory system should instead select important information, retain it durably, and retrieve relevant memories when later conversations need them.
 
-Contains image-prompt skill knowledge.
+The design must distinguish:
 
-Used for:
+- Lisa's identity,
+- stable knowledge,
+- learned user or workflow memory,
+- temporary retrieved context,
+- executable tools and skills.
 
-* /create image
-* /iterate image
+Open questions include authorship, correction, provenance, retrieval, retention, and whether Lisa may save entries without confirmation.
 
-Must not be retrieved during normal chat.
+### External image-generation engine
 
-test-reference.md
+Image generation is intentionally outside Lisa2. A separate local engine is being built to accept semantic image intent from Lisa, translate that intent into Krea2 prompts, and submit the result to local image generation.
 
-Test fixture for retrieval and sentinel assertions.
+Lisa2 needs an integration boundary for that engine, not its own image-generation implementation. The request schema, response schema, progress reporting, and ownership of generated-image history remain unresolved.
 
-reference.md
+## Explicitly not implemented
 
-Currently empty or legacy placeholder.
+- General grounded internet access.
+- Durable conversational or personal memory.
+- A settled wiki storage and retrieval system.
+- The integration with the separate semantic-to-Krea2 image-generation engine.
+- Engine-neutral voice-cloning APIs.
+- Automatic model routing.
+- A generalized plugin or tool orchestration platform.
+- Multi-user authorization.
 
-Should be removed or documented if retained.
+These are absence statements, not a promised implementation sequence.
 
-⸻
+## Evidence discipline
 
-Identity vs Skill
-
-A major architectural boundary:
-
-Identity is who the character is.
-
-Skills are what the character can do.
-
-Examples:
-
-Lisa identity:
-
-* appearance
-* personality
-* voice
-* stable canon
-
-Image skill:
-
-* prompt structure
-* lighting
-* lens
-* composition
-* aspect ratio
-* iteration rules
-
-These must not be mixed in the same retrieval path.
-
-⸻
-
-Command Routing
-
-Slash commands create explicit skill modes.
-
-Current commands:
-
-/create image
-
-Purpose:
-
-* activate image-prompt mode
-* load Lisa visual identity
-* load Z-Image prompt skill
-* produce a high-quality image prompt
-
-/iterate image
-
-Purpose:
-
-* revise the last generated image prompt
-* load Z-Image prompt skill
-* include previous prompt ephemerally
-* include Lisa visual identity only if Lisa remains the subject
-
-Normal chat must not activate Z-Image skill retrieval.
-
-⸻
-
-Persistent vs Ephemeral Context
-
-Persistent:
-
-* user messages
-* assistant replies
-* lightweight runtime state explicitly intended to survive, such as last generated image prompt
-
-Ephemeral:
-
-* retrieved reference sections
-* tool output
-* previous prompt injection for iteration
-* diagnostic context
-
-Hard invariant:
-
-Ephemeral context may influence one model call, but must not become persistent history.
-
-⸻
-
-Voice Architecture
-
-Current voice path target:
-
-Lisa reply
-↓
-browser callTts()
-↓
-POST voice sidecar /api/tts
-↓
-audio_url returned
-↓
-browser GET /api/audio/
-↓
-audio.play()
-
-Known-good layers:
-
-* sidecar health
-* TTS generation
-* WAV generation
-* WAV serving
-* manual playback
-
-Current status:
-
-* GUI chat to browser playback path: implemented and user-confirmed working
-* Uses Web Audio API (`AudioContext.decodeAudioData` + `BufferSource`), primed on user gesture
-* Same-origin proxy avoids mixed-content blocking
-
-Do not re-debug proven-good layers unless new evidence appears.
-
-⸻
-
-Testing Philosophy
-
-Positive assertions matter.
-
-Tests should verify that useful context reaches the model, not only that content does not leak.
-
-⸻
-
-Operational Invariants
-
-1. No default system prompt overrides Lisa’s canonical persona in `spec/lisa.md`. `SYSTEM_PROMPT` is an explicit development override only.
-2. lisa-chat.js owns persistent history.
-3. Browser does not own conversation history.
-4. Retrieved content is ephemeral.
-5. Z-Image skill does not load during normal chat.
-6. Voice starts with normal Lisa startup.
-7. Startup state must be managed and observable.
-8. Logs and PIDs must match actual running services.
-9. Unmanaged processes must be reported clearly.
-
-⸻
-
-Resolved Issue: Voice from GUI Chat
-
-Lisa now produces audible voice from normal GUI chat. This was resolved by implementing `callTts()` in `app.js` using the Web Audio API (`AudioContext.decodeAudioData` + `BufferSource`), with the `AudioContext` primed on user gesture to satisfy autoplay policies. Same-origin proxy routes (`/api/voice/tts`, `/api/voice/audio/*`) avoid mixed-content blocking.
-
-All layers are proven good:
-
-* voice sidecar reachable
-* /api/tts works manually
-* audio URL returned
-* WAV file served
-* manual playback works
-* GUI chat → TTS proxy → audio proxy → AudioContext playback → speaker (user-confirmed)
-
-Do not re-debug proven-good layers unless new evidence appears.
-
-⸻
-
-Future Architecture Direction
-
-Skill Notebook / Wiki
-
-Likely future structure:
-
-identity/
-skills/
-tools/
-runtime/
-tests/
-
-Skills may become editable wiki/notebook pages.
-
-Examples:
-
-* skills/z-image.md
-* skills/apple-mdm.md
-* skills/intune.md
-* skills/boliga-scraper.md
-* skills/weather.md
-
-⸻
-
-Service Control Plane
-
-Shell scripts are acceptable for the current two-service stack.
-
-If Lisa grows beyond 3–4 local services, move toward a manifest-driven control plane.
-
-Desired future operator interface:
-
-lisa up
-lisa down
-lisa status
-lisa logs
-
-The operator should manage Lisa, not individual sub-processes.
-
-⸻
-
-Tooling Direction
-
-Future tools should follow the same pattern:
-
-explicit intent
-↓
-tool runs
-↓
-result injected ephemerally
-↓
-Lisa responds
-
-Tool output should not become memory unless explicitly saved.
-
-Potential future tools:
-
-* Python script execution
-* weather forecast tools
-* MDM policy tools
-* scraper tools
-* image generation backend
-* provider-specific adapter generation
-
-⸻
-
-Architecture Goal
-
-The engine should support many characters and many skills.
-
-Lisa today:
-
-* local companion
-* image prompting
-* voice
-
-Future persona example:
-
-James:
-
-* old Irish pirate personality
-* fly fishing knowledge
-* weather opinions
-* pub wisdom
-
-The engine should not care which persona is loaded.
-
-Persona, identity, skills, and tools should be replaceable modules.
+Architecture documents describe structure; they do not prove runtime behavior. A source audit must not be presented as testing, live verification, or Project Owner acceptance. Runtime work requires a separately approved scope.

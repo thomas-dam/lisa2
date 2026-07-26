@@ -1,8 +1,8 @@
 // Acceptance test for the persistent/ephemeral split.
 //
 // Asserts the HARD INVARIANT: no retrieved reference text leaks into the
-// persistent conversation history. Runs a scripted session with no Ollama
-// dependency (the model call is stubbed).
+// persistent conversation history. Runs a scripted session with no live
+// model-provider dependency (the model call is stubbed).
 
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,7 +35,7 @@ const SCRIPT = [
   "Hi Lisa, how are you today?",
   "Tell me about comfyui workflows.", // retrieval: comfyui
   "Nice. What's your favorite color?",
-  "How does ollama serve a model?", // retrieval: ollama
+  "How does a local model provider serve inference?", // retrieval: local model
   "Cool, makes sense.",
   "Can you run a python script for me?", // retrieval: python
   "Thanks for that.",
