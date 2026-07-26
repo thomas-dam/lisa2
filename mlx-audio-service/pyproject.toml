@@ -4,7 +4,11 @@ version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
     "mlx-audio==0.4.5",
+    "numpy>=1.26,<3",
     "gradio==6.20.0",
     "fastapi==0.139.0",
     "uvicorn==0.51.0",
 ]
+
+[tool.setuptools]
+py-modules = []

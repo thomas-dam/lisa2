@@ -14,8 +14,12 @@
   },
   "tts": {
     "provider": "mlx-audio",
-    "endpoint": "http://127.0.0.1:8000/v1/audio/speech",
-    "voice": "rose"
+    "engine": "qwen3",
+    "model": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
+    "endpoint": "http://127.0.0.1:8000/v1/audio/speech/stream",
+    "voice": "rose",
+    "language": "auto",
+    "streaming_interval": 0.32
   },
   "audio": {
     "tmp_dir": "tmp/voice",

@@ -32,8 +32,11 @@ let sidecarUrl = "";
 let voiceEnabled = false;
 let defaultVoice = "";
 let ttsProvider = "";
+let ttsEngine = "";
 let speakResponses = true;
 let audioCtx = null;
+let nextPlaybackTime = 0;
+let speechQueue = Promise.resolve();
 
 function ensureAudioCtx() {
   if (!audioCtx) {
@@ -339,7 +342,7 @@ async function sendMessage(content, fromVoice) {
 
   try {
     const images = pendingAttachments.map((a) => a.base64).slice(0, 4);
-    const response = await fetch("/api/chat", {
+    const response = await fetch("/api/chat/stream", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ content, images: images.length > 0 ? images : undefined })
@@ -347,57 +350,36 @@ async function sendMessage(content, fromVoice) {
 
     console.debug(`[DIAG-REQ] ${reqId} RESPONSE status=${response.status}`);
 
-    const rawText = await response.text();
-    console.debug(`[DIAG-REQ] ${reqId} RAW_BODY length=${rawText.length}`);
-
-    if (rawText.length === 0) {
-      throw new Error("Empty response body received.");
-    }
-
-    let payload;
-    try {
-      payload = JSON.parse(rawText);
-    } catch (jsonErr) {
-      console.error(`[DIAG-REQ] ${reqId} JSON_PARSE_FAILED`, {
-        error: jsonErr.message,
-        bodyLength: rawText.length,
-        status: response.status,
-      });
-      throw new Error(`JSON parse error: ${jsonErr.message}`);
-    }
-
     if (!response.ok) {
+      const payload = await response.json();
       throw new Error(payload.detail || payload.error || "Chat request failed.");
     }
+    if (!response.body) throw new Error("Chat returned no response stream.");
 
-    const reply = payload.reply || "No response returned.";
+    let reply = "";
+    let donePayload = null;
+    await readNdjson(response.body, (event) => {
+      if (event.type === "delta") {
+        reply += event.text || "";
+        pendingBubble.innerHTML = renderMarkdown(reply);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      } else if (event.type === "speech" && speakResponses && voiceEnabled) {
+        queueSpeech(event.text, reqId);
+      } else if (event.type === "done") {
+        donePayload = event;
+        reply = event.reply || reply;
+      } else if (event.type === "error") {
+        throw new Error(event.detail || event.error || "Chat stream failed.");
+      }
+    });
+
+    if (!donePayload) throw new Error("Chat stream ended before completion.");
     const chatTime = ((performance.now() - chatStart) / 1000).toFixed(2);
     debugLog("chat", `${chatTime}s`);
     pendingBubble.innerHTML = renderMarkdown(reply);
-    setStatus(`Ready (${payload.model || modelInput.value.trim()})`);
+    setStatus(`Ready (${donePayload.model || modelInput.value.trim()})`);
     clearAttachments();
     console.debug(`[DIAG-REQ] ${reqId} OK reply_len=${reply.length}`);
-
-    // --- Voice gate ---
-    const voiceVars = {
-      speakResponses,
-      fromVoice: typeof fromVoice !== "undefined",
-      sidecarUrl,
-      voiceEnabled,
-      replyPreview: reply.slice(0, 80),
-      replyLength: reply.length,
-    };
-    console.debug(`[VOICE] gate decision:`, voiceVars);
-
-    if (speakResponses && sidecarUrl) {
-      console.debug(`[VOICE] calling TTS for req ${reqId}`, {
-        replyPreview: reply.slice(0, 120),
-        replyLength: reply.length,
-      });
-      await callTts(reply, reqId);
-    } else {
-      console.debug(`[VOICE] skipped: speakResponses=${speakResponses} sidecarUrl="${sidecarUrl}"`);
-    }
   } catch (error) {
     console.error(`[DIAG-REQ] ${reqId} FAIL`, { error: error.message });
     pendingBubble.textContent = error.message;
@@ -410,6 +392,25 @@ async function sendMessage(content, fromVoice) {
     micButton.disabled = false;
     messagesEl.scrollTop = messagesEl.scrollHeight;
     input.focus();
+  }
+}
+
+async function readNdjson(stream, onEvent) {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    pending += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const lines = pending.split("\n");
+    pending = done ? "" : (lines.pop() || "");
+    for (const line of lines) {
+      if (line.trim()) onEvent(JSON.parse(line));
+    }
+    if (done) {
+      if (pending.trim()) onEvent(JSON.parse(pending));
+      return;
+    }
   }
 }
 
@@ -537,8 +538,38 @@ async function handleVoiceInput(audioBlob) {
   }
 }
 
+function queueSpeech(text, reqId) {
+  if (!text?.trim()) return;
+  speechQueue = speechQueue
+    .then(() => callTts(text, reqId))
+    .catch((error) => {
+      console.error("[VOICE] queued TTS failed:", error);
+    });
+}
+
+function schedulePcm(pcmBytes, sampleRate, reqId) {
+  if (pcmBytes.byteLength === 0) return;
+  const ctx = ensureAudioCtx();
+  const samples = new Float32Array(
+    pcmBytes.buffer,
+    pcmBytes.byteOffset,
+    pcmBytes.byteLength / Float32Array.BYTES_PER_ELEMENT
+  );
+  const audioBuffer = ctx.createBuffer(1, samples.length, sampleRate);
+  audioBuffer.copyToChannel(samples, 0);
+  const source = ctx.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(ctx.destination);
+  const startAt = Math.max(ctx.currentTime + 0.025, nextPlaybackTime);
+  source.start(startAt);
+  nextPlaybackTime = startAt + audioBuffer.duration;
+  source.onended = () => {
+    console.debug(`[VOICE] audio chunk ended`, { reqId, duration: audioBuffer.duration });
+  };
+}
+
 async function callTts(text, reqId) {
-  console.debug(`[VOICE] callTts entered: sidecarUrl="${sidecarUrl}" speakResponses=${speakResponses} text_len=${text.length} req=${reqId}`);
+  console.debug(`[VOICE] callTts entered: engine="${ttsEngine}" speakResponses=${speakResponses} text_len=${text.length} req=${reqId}`);
   if (!speakResponses) {
     console.warn(`[VOICE] callTts aborted: speakResponses=${speakResponses}`);
     return;
@@ -568,10 +599,8 @@ async function callTts(text, reqId) {
       body: ttsBody,
     });
 
-    // --- Stage 2: Handle the raw WAV response ---
+    // --- Stage 2: Schedule progressive float32 PCM chunks ---
     const ttsStatus = ttsRes.status;
-    const ttsStatusText = ttsRes.statusText;
-    const ttsHeaders = Object.fromEntries([...ttsRes.headers.entries()]);
     const ttsElapsed = ((performance.now() - ttsStart) / 1000).toFixed(3);
 
     if (!ttsRes.ok) {
@@ -579,48 +608,45 @@ async function callTts(text, reqId) {
       console.warn(`[VOICE] TTS request failed: status=${ttsStatus} body=${errorText.slice(0, 300)} elapsed=${ttsElapsed}s`);
       return;
     }
+    if (!ttsRes.body) throw new Error("TTS returned no audio stream.");
+    const audioFormat = ttsRes.headers.get("x-audio-format");
+    if (audioFormat !== "f32le") {
+      throw new Error(`Unsupported TTS audio format: ${audioFormat || "missing"}.`);
+    }
+    const sampleRate = Number(ttsRes.headers.get("x-audio-sample-rate") || 24_000);
+    const reader = ttsRes.body.getReader();
+    let pending = new Uint8Array();
+    let bytesReceived = 0;
+    const minimumChunkBytes = Math.round(sampleRate * 0.08) * Float32Array.BYTES_PER_ELEMENT;
 
-    const wavArrayBuffer = await ttsRes.arrayBuffer();
-    console.debug(`[VOICE] TTS WAV response:`, {
-      reqId: ttsReqId,
-      status: ttsStatus,
-      statusText: ttsStatusText,
-      headers: ttsHeaders,
-      bytes: wavArrayBuffer.byteLength,
-      elapsedSec: ttsElapsed,
-    });
+    while (true) {
+      const { value, done } = await reader.read();
+      if (value?.byteLength) {
+        const combined = new Uint8Array(pending.byteLength + value.byteLength);
+        combined.set(pending);
+        combined.set(value, pending.byteLength);
+        pending = combined;
+        bytesReceived += value.byteLength;
+      }
 
-    if (wavArrayBuffer.byteLength === 0) {
-      console.error(`[VOICE] TTS response contained no audio bytes`);
-      return;
+      const alignedBytes = pending.byteLength - (pending.byteLength % 4);
+      if (alignedBytes >= minimumChunkBytes || (done && alignedBytes > 0)) {
+        const playable = pending.slice(0, alignedBytes);
+        pending = pending.slice(alignedBytes);
+        schedulePcm(playable, sampleRate, ttsReqId);
+      }
+      if (done) break;
     }
 
-    debugLog("tts", `${ttsElapsed}s`);
-    debugLog("audio_url", `inline WAV (${wavArrayBuffer.byteLength} bytes)`);
-
-    // --- Stage 3: Decode and play via AudioContext ---
-    const ctx = ensureAudioCtx();
-    if (ctx.state === "suspended") {
-      console.warn(`[VOICE] AudioContext is suspended — attempting resume`);
-      await ctx.resume();
-    }
-
-    const audioBuffer = await ctx.decodeAudioData(wavArrayBuffer.slice(0));
-    console.debug(`[VOICE] Audio decoded: duration=${audioBuffer.duration.toFixed(3)}s channels=${audioBuffer.numberOfChannels} sampleRate=${audioBuffer.sampleRate}`);
-
-    const source = ctx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(ctx.destination);
-
-    source.onended = () => {
-      console.debug(`[VOICE] Audio playback ended`, { reqId: ttsReqId });
-    };
-
-    source.start(0);
-    console.debug(`[VOICE] Audio playback started via AudioContext`, {
+    if (bytesReceived === 0) throw new Error("TTS returned empty audio.");
+    const totalElapsed = ((performance.now() - ttsStart) / 1000).toFixed(3);
+    debugLog("tts", `${totalElapsed}s streaming`);
+    debugLog("audio_url", `inline PCM (${bytesReceived} bytes)`);
+    console.debug(`[VOICE] TTS stream complete`, {
       reqId: ttsReqId,
-      duration: audioBuffer.duration,
-      ctxState: ctx.state,
+      bytes: bytesReceived,
+      sampleRate,
+      elapsedSec: totalElapsed
     });
   } catch (err) {
     console.error(`[VOICE] TTS unexpected error (text reply still shown):`, {
@@ -705,8 +731,9 @@ async function loadVoiceConfig() {
     sidecarUrl = cfg.sidecar_url || "";
     defaultVoice = cfg.default_voice || "";
     ttsProvider = cfg.tts_provider || "";
-    console.debug(`[VOICE] config loaded: enabled=${voiceEnabled} sidecar=${sidecarUrl} tts=${ttsProvider} voice=${defaultVoice}`);
-    if (voiceEnabled && sidecarUrl) {
+    ttsEngine = cfg.tts_engine || "";
+    console.debug(`[VOICE] config loaded: enabled=${voiceEnabled} sidecar=${sidecarUrl} tts=${ttsProvider}/${ttsEngine} voice=${defaultVoice}`);
+    if (voiceEnabled) {
       micButton.hidden = false;
       voiceToggleRow.hidden = false;
       voiceDebugPanel.hidden = false;

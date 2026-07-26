@@ -6,7 +6,6 @@ Only the Project Owner selects the next task. Only one implementation task may b
 
 ## Owner decisions
 
-- Decide whether the current uncommitted MLX Audio migration is the intended base for later voice work.
 - Decide which subsystem, if any, should become the next approved implementation task.
 
 Runtime testing or live verification is outside the documentation-audit scope and requires separate approval.
@@ -20,13 +19,13 @@ These are audit findings, not an approved work sequence:
 - Define memory provenance, correction, forgetting, and whether saving requires confirmation.
 - Decide whether chat export should include Lisa's private persona and whether exports should be restorable.
 - Finish Lisa-specific UI naming where “Standalone Bot” and “AI” remain.
-- Decide whether provider access needs a stable adapter, streaming, cancellation, timeouts, or model-capability checks.
+- Decide whether provider access needs a stable adapter, cancellation, timeouts, or model-capability checks beyond the implemented streaming path.
 - Replace keyword-only knowledge routing if the wiki or persistent-memory direction is approved.
 - Define the integration contract through which Lisa sends semantic image intent to the separate Krea2 prompt and local-generation engine.
-- Give ASR, TTS, voice selection, and voice creation explicit replaceable boundaries.
+- Give ASR, voice selection, and voice creation explicit replaceable boundaries beyond the implemented TTS engine adapter.
 - Resolve the direct browser-to-ASR loopback path for remote or HTTPS use.
 - Route ASR through the Lisa server so the browser has one gateway for every Lisa capability.
-- Reconcile `voice_enabled`, ASR language, and unused voice configuration fields with actual behavior.
+- Reconcile `voice_enabled` and ASR language with actual behavior.
 - Choose one canonical lifecycle path and make command names reflect whether they start the bot, ASR, TTS, or the full Lisa system.
 - Review unused or historical code paths identified in the component audit before deleting anything.
 - Define latency, progress, cancellation, and failure presentation for internal capabilities so slower work does not make the browser chat feel blocked or fragmented.
@@ -86,18 +85,15 @@ Goal: make speech synthesis, voice selection, and voice creation replaceable cap
 
 Questions to answer before implementation:
 
-- What is the smallest engine-neutral synthesis request and response contract?
 - How are installed voices enumerated and selected?
 - What metadata and files make up a portable voice?
 - Is cloning an offline preparation workflow, a runtime API, or both?
-- Which OmniVoice- or Qwen-family models should be evaluated?
-- How are model size, latency, quality, and hardware pressure compared?
+- How should Qwen3 0.6B Base 8-bit quality, latency, and hardware pressure be measured against alternatives?
 
-Rose is the current voice. MLX Audio is the current synthesis implementation. Neither should be hardwired into Lisa's identity.
+Rose is the current voice. Qwen3 is the configured engine through the MLX Audio adapter, with OmniVoice retained as a selectable non-streaming fallback. None of these choices is hardwired into Lisa's identity.
 
 ## Repository cleanup candidates
 
-- Keep current documentation synchronized when the MLX Audio working tree is accepted or changed.
 - Confirm that saved voice assets are intentionally local-only and backed up outside Git.
 - Remove stale runtime PID files through the normal status/start workflow when the local environments are restored.
 - Decide whether service adoption should validate health-response identity rather than accepting any process that answers the expected route.

@@ -1,5 +1,6 @@
 from pathlib import Path
 import glob
+import json
 import re
 import shutil
 import uuid
@@ -10,15 +11,23 @@ from mlx_audio.tts.utils import load_model
 
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_MODEL = "mlx-community/OmniVoice-bfloat16"
-FAST_MODEL = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"
+VOICE_CONFIG_PATH = BASE_DIR.parent / "config" / "voice.json"
 OUTPUT_DIR = BASE_DIR / "outputs"
 VOICES_DIR = BASE_DIR / "voices"
 VOICE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
+
+def configured_model() -> str:
+    try:
+        config = json.loads(VOICE_CONFIG_PATH.read_text(encoding="utf-8"))
+        return config["tts"]["model"]
+    except (FileNotFoundError, KeyError, TypeError, json.JSONDecodeError):
+        return "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"
+
+
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 VOICES_DIR.mkdir(parents=True, exist_ok=True)
-model = load_model(DEFAULT_MODEL)
+model = load_model(configured_model())
 
 
 def voice_dir(name: str) -> Path:

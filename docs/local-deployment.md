@@ -34,6 +34,7 @@ Downloaded models, virtual environments, generated WAV files, saved voice record
 - `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` provide environment defaults.
 - `SYSTEM_PROMPT` is a deliberate development-only persona override.
 - Voice configuration lives in `config/voice.json`.
+- The checked-in TTS selection is engine `qwen3`, model `mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit`, voice `rose`, and a 0.32-second streaming interval.
 
 ## Operations
 
@@ -52,14 +53,16 @@ Run all commands from the Lisa2 root:
 
 - The browser sends recorded audio directly to the configured ASR sidecar on port 3330.
 - Browser TTS calls `POST /api/voice/tts` on the Node server.
-- Node sends `{"input":"...","voice":"rose"}` to MLX Audio at `POST /v1/audio/speech`.
-- MLX Audio returns WAV bytes, which Node forwards directly to the browser.
-- The current adapter loads `mlx-community/OmniVoice-bfloat16`.
+- OpenRouter text streams to the browser as display deltas and sentence-sized speech events.
+- Node sends the text, voice, engine, model, language, and interval from `config/voice.json` to MLX Audio at `POST /v1/audio/speech/stream`.
+- MLX Audio returns streaming mono float32 PCM. Node forwards it without buffering, and the browser schedules chunks in order.
+- The current adapter loads `mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit` lazily on first speech.
+- Set `tts.engine` to `omnivoice` and `tts.model` to `mlx-community/OmniVoice-bfloat16` to select the retained whole-utterance fallback.
 - The voice-library GUI creates named voices from a reference recording and exact transcript.
 
 There is no Supertonic fallback.
 
-The browser and Node layers should depend on a stable speech capability rather than MLX Audio or OmniVoice internals. Engine-neutral synthesis and voice-cloning contracts remain design work.
+The browser and Node layers depend on the Lisa speech contract rather than Qwen or OmniVoice internals. The Python adapter owns model-specific generation. A stable engine-neutral voice-creation contract remains design work.
 
 Create or update a saved voice with:
 
@@ -73,9 +76,9 @@ Each named voice is stored locally under `mlx-audio-service/voices/<name>/` as a
 
 | Service | Health | Main operation |
 |---|---|---|
-| Lisa server | `GET /api/health` | `POST /api/chat` |
+| Lisa server | `GET /api/health` | `POST /api/chat/stream` |
 | WhisperMLX ASR | `GET /api/health` | `POST /api/asr` with multipart audio and language |
-| MLX Audio TTS | `GET /health` | `POST /v1/audio/speech` |
+| MLX Audio TTS | `GET /health` | `POST /v1/audio/speech/stream` |
 
 The first ASR or TTS use may load a large local model and therefore take longer than subsequent requests.
 

@@ -2,7 +2,18 @@ import { createServer } from "node:http";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createHistory, chatTurn, createRetriever, createFullRetriever, loadReference, loadPersona, createOpenRouterChat } from "./lisa-chat.js";
+import {
+  chatTurn,
+  chatTurnStream,
+  createFullRetriever,
+  createHistory,
+  createOpenRouterChat,
+  createOpenRouterChatStream,
+  createRetriever,
+  createSpeechChunker,
+  loadPersona,
+  loadReference
+} from "./lisa-chat.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(__dirname, "public");
@@ -71,6 +82,7 @@ let zImageRetriever = null;
 let visualSections = null;
 let zImageSections = null;
 let modelChat = null;
+let modelChatStream = null;
 let lastGeneratedPrompt = null;
 
 async function tryLoadReference(path, label) {
@@ -114,6 +126,7 @@ async function initializeChat() {
   zImageSections = zResult.sections;
 
   modelChat = createOpenRouterChat({ getSettings: loadOpenRouterSettings });
+  modelChatStream = createOpenRouterChatStream({ getSettings: loadOpenRouterSettings });
 }
 
 function sendJson(res, statusCode, payload) {
@@ -231,6 +244,106 @@ async function handleChat(req, res, reqId) {
   }
 }
 
+function loadSectionForCommand(command) {
+  if (!command) return visualRetriever;
+
+  if (command.type === "create_image") {
+    const fullZ = createFullRetriever(zImageSections);
+    const fullV = createFullRetriever(visualSections);
+    return (text) => {
+      const results = [];
+      const zHit = fullZ(text);
+      if (zHit) results.push(...(Array.isArray(zHit) ? zHit : [zHit]));
+      const vHit = fullV(text);
+      if (vHit) results.push(...(Array.isArray(vHit) ? vHit : [vHit]));
+      return results.length > 0 ? results : null;
+    };
+  }
+
+  const includesLisa = lastGeneratedPrompt
+    ? lastGeneratedPrompt.toLowerCase().includes("lisa")
+    : false;
+  const fullZ = createFullRetriever(zImageSections);
+  return (text) => {
+    const results = [];
+    const zHit = fullZ(text);
+    if (zHit) results.push(...(Array.isArray(zHit) ? zHit : [zHit]));
+    if (includesLisa || text.toLowerCase().includes("lisa")) {
+      const vHit = createFullRetriever(visualSections)(text);
+      if (vHit) results.push(...(Array.isArray(vHit) ? vHit : [vHit]));
+    }
+    if (lastGeneratedPrompt) {
+      results.push({ text: `Previous prompt:\n${lastGeneratedPrompt}`, keyword: "last-prompt" });
+    }
+    return results.length > 0 ? results : null;
+  };
+}
+
+function writeStreamEvent(res, event) {
+  res.write(`${JSON.stringify(event)}\n`);
+}
+
+async function handleChatStream(req, res, reqId) {
+  try {
+    const body = await readRequestJson(req);
+    const userContent = body.content || "";
+    const userImages = Array.isArray(body.images) ? body.images.slice(0, 4) : [];
+    if (!userContent.trim()) {
+      sendJson(res, 400, { error: "Send at least one message." });
+      return;
+    }
+
+    res.writeHead(200, {
+      "content-type": "application/x-ndjson; charset=utf-8",
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff"
+    });
+    const command = parseCommand(userContent);
+    const speech = createSpeechChunker();
+    const reply = await chatTurnStream({
+      history,
+      userTurn: userContent,
+      images: userImages,
+      loadSection: loadSectionForCommand(command),
+      chat: modelChatStream,
+      onDelta(delta) {
+        writeStreamEvent(res, { type: "delta", text: delta });
+        for (const text of speech.push(delta)) {
+          writeStreamEvent(res, { type: "speech", text });
+        }
+      }
+    });
+    for (const text of speech.flush()) {
+      writeStreamEvent(res, { type: "speech", text });
+    }
+    if (command) lastGeneratedPrompt = reply;
+    const settings = await loadOpenRouterSettings();
+    writeStreamEvent(res, {
+      type: "done",
+      reply,
+      model: settings.model,
+      historyLength: history.length
+    });
+    res.end();
+    console.log(`[DIAG-REQ] ${reqId} END status=200 stream=yes reply_chars=${reply.length}`);
+  } catch (error) {
+    if (res.headersSent) {
+      writeStreamEvent(res, {
+        type: "error",
+        error: "OpenRouter chat request failed.",
+        detail: error.message
+      });
+      res.end();
+    } else {
+      sendJson(res, 500, {
+        error: error instanceof SyntaxError ? "Invalid JSON request." : "OpenRouter chat request failed.",
+        detail: error.message
+      });
+    }
+    console.log(`[DIAG-REQ] ${reqId} CATCH status=500 stream=yes err=${error.message}`);
+  }
+}
+
 async function handleSave(req, res) {
   try {
     sendJson(res, 200, {
@@ -281,7 +394,8 @@ function handleVoiceConfig(req, res) {
     voice_enabled: voiceConfig.voice_enabled === true,
     sidecar_url: sidecarUrl,
     default_voice: tts.voice || "rose",
-    tts_provider: "mlx-audio",
+    tts_provider: tts.provider || "mlx-audio",
+    tts_engine: tts.engine || "qwen3",
   });
 }
 
@@ -307,29 +421,43 @@ async function handleVoiceTtsProxy(req, res) {
     const ttsRes = await fetch(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ input: text, voice }),
+      body: JSON.stringify({
+        input: text,
+        voice,
+        engine: tts.engine || "qwen3",
+        model: tts.model || undefined,
+        language: tts.language || "auto",
+        streaming_interval: tts.streaming_interval || 0.32
+      }),
     });
-    const audioBuffer = await ttsRes.arrayBuffer();
 
     if (!ttsRes.ok) {
-      const detail = Buffer.from(audioBuffer).toString("utf8").slice(0, 500);
+      const detail = (await ttsRes.text()).slice(0, 500);
       sendJson(res, ttsRes.status, { error: "MLX Audio TTS request failed.", detail });
       return;
     }
-
-    if (audioBuffer.byteLength === 0) {
-      sendJson(res, 502, { error: "MLX Audio TTS returned empty audio." });
+    if (!ttsRes.body) {
+      sendJson(res, 502, { error: "MLX Audio TTS returned no audio stream." });
       return;
     }
 
     res.writeHead(200, {
-      "content-type": "audio/wav",
-      "content-length": audioBuffer.byteLength,
+      "content-type": ttsRes.headers.get("content-type") || "application/octet-stream",
       "cache-control": "no-store",
+      "x-audio-format": ttsRes.headers.get("x-audio-format") || "f32le",
+      "x-audio-sample-rate": ttsRes.headers.get("x-audio-sample-rate") || "24000",
+      "x-lisa-tts-engine": ttsRes.headers.get("x-lisa-tts-engine") || tts.engine || "qwen3",
     });
-    res.end(Buffer.from(audioBuffer));
+    for await (const chunk of ttsRes.body) {
+      res.write(chunk);
+    }
+    res.end();
   } catch (error) {
-    sendJson(res, 502, { error: "MLX Audio TTS unreachable.", detail: error.message });
+    if (res.headersSent) {
+      res.destroy(error);
+    } else {
+      sendJson(res, 502, { error: "MLX Audio TTS unreachable.", detail: error.message });
+    }
   }
 }
 
@@ -399,6 +527,13 @@ const server = createServer((req, res) => {
     });
 
     void handleChat(req, res, reqId);
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/chat/stream") {
+    const reqId = nextReqId();
+    res.setHeader("X-Request-Id", reqId);
+    void handleChatStream(req, res, reqId);
     return;
   }
 

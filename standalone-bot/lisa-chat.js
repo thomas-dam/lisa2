@@ -158,6 +158,91 @@ export async function chatTurn({ history, userTurn, images, loadSection, chat, l
   return reply;
 }
 
+export async function chatTurnStream({
+  history,
+  userTurn,
+  images,
+  loadSection,
+  chat,
+  onDelta,
+  log = defaultLog
+}) {
+  const retrieved = loadSection ? loadSection(userTurn) : null;
+  const retrievedTexts = retrieved
+    ? (Array.isArray(retrieved) ? retrieved.map((r) => r.text) : [retrieved.text])
+    : [];
+  const call = assembleCall(
+    history,
+    userTurn,
+    retrievedTexts.length > 0 ? retrievedTexts : null,
+    images
+  );
+  const reply = await chat(call, onDelta);
+
+  history.push({ role: "user", content: userTurn });
+  history.push({ role: "assistant", content: reply });
+
+  log({
+    retrievalFired: retrievedTexts.length > 0,
+    section: retrieved && !Array.isArray(retrieved) ? retrieved.keyword : null,
+    sections: Array.isArray(retrieved) ? retrieved.map((r) => r.keyword).join(",") : null,
+    ephemeralTokens: retrievedTexts.reduce((t, s) => t + estimateTokens(contextMessage(s)), 0),
+    historyLen: history.length
+  });
+
+  return reply;
+}
+
+export function createSpeechChunker({ maxCharacters = 240 } = {}) {
+  let buffer = "";
+
+  function takeReadyChunks({ flush = false } = {}) {
+    const chunks = [];
+    while (buffer) {
+      const sentenceBoundary = findSentenceBoundary(buffer);
+      let cut = sentenceBoundary;
+
+      if (cut < 0 && buffer.length > maxCharacters) {
+        cut = buffer.lastIndexOf(" ", maxCharacters);
+        if (cut < 1) cut = maxCharacters;
+      }
+      if (cut < 0 && flush) cut = buffer.length;
+      if (cut < 0) break;
+
+      const chunk = normalizeSpeechText(buffer.slice(0, cut));
+      buffer = buffer.slice(cut).trimStart();
+      if (chunk) chunks.push(chunk);
+    }
+    return chunks;
+  }
+
+  return {
+    push(text) {
+      buffer += String(text || "");
+      return takeReadyChunks();
+    },
+    flush() {
+      return takeReadyChunks({ flush: true });
+    }
+  };
+}
+
+function findSentenceBoundary(text) {
+  const match = /[.!?…](?:["')\]]*)\s+|\n+/.exec(text);
+  return match ? match.index + match[0].length : -1;
+}
+
+function normalizeSpeechText(text) {
+  return text
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[*_#>|~-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function defaultLog(entry) {
   const parts = [
     `retrieval=${entry.retrievalFired ? "yes" : "no"}`,
@@ -213,4 +298,84 @@ export function createOpenRouterChat({ getSettings, fetchImpl = fetch }) {
     }
     return content.trim();
   };
+}
+
+export function createOpenRouterChatStream({ getSettings, fetchImpl = fetch }) {
+  return async (messages, onDelta = () => {}) => {
+    const { apiKey, model } = await getSettings();
+    if (!apiKey) throw new Error("OpenRouter API key is not configured. Add it in Settings.");
+    const response = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        "content-type": "application/json",
+        "x-openrouter-title": "Lisa Companion"
+      },
+      body: JSON.stringify({
+        model,
+        messages: openRouterMessages(messages),
+        stream: true,
+        temperature: 0.7,
+        max_tokens: 900
+      })
+    });
+
+    if (!response.ok) {
+      let detail = "";
+      try {
+        const data = JSON.parse(await response.text());
+        detail = data?.error?.message ? `: ${data.error.message}` : "";
+      } catch {
+        // Preserve the status-only error when the provider body is unreadable.
+      }
+      throw new Error(`OpenRouter request failed (${response.status})${detail}`);
+    }
+    if (!response.body) {
+      throw new Error("OpenRouter returned no response stream.");
+    }
+
+    let content = "";
+    let pending = "";
+    const decoder = new TextDecoder();
+
+    for await (const bytes of response.body) {
+      pending += decoder.decode(bytes, { stream: true });
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() || "";
+      for (const line of lines) {
+        const delta = openRouterDelta(line);
+        if (delta) {
+          content += delta;
+          onDelta(delta);
+        }
+      }
+    }
+    pending += decoder.decode();
+    for (const line of pending.split(/\r?\n/)) {
+      const delta = openRouterDelta(line);
+      if (delta) {
+        content += delta;
+        onDelta(delta);
+      }
+    }
+
+    if (!content.trim()) {
+      throw new Error(`OpenRouter returned empty content for ${model}.`);
+    }
+    return content.trim();
+  };
+}
+
+function openRouterDelta(line) {
+  if (!line.startsWith("data:")) return "";
+  const payload = line.slice(5).trim();
+  if (!payload || payload === "[DONE]") return "";
+  let data;
+  try {
+    data = JSON.parse(payload);
+  } catch {
+    return "";
+  }
+  const delta = data?.choices?.[0]?.delta?.content;
+  return typeof delta === "string" ? delta : "";
 }

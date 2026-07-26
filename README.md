@@ -38,7 +38,7 @@ Open `http://127.0.0.1:3320`.
 - Lisa is the product; modularity is for replaceable implementations, not a multi-character roadmap.
 - OpenRouter is the current chat provider.
 - WhisperMLX is the current ASR implementation.
-- MLX Audio with an OmniVoice model is the current TTS and local voice-library implementation.
+- MLX Audio with Qwen3-TTS 0.6B Base 8-bit is the current streaming TTS and local voice-library implementation; OmniVoice remains a selectable adapter.
 - Rose is the current configured voice.
 - Image generation belongs to a separate local semantic-to-Krea2 engine.
 - Durable memory, wiki-style knowledge, generalized internet access, and the image-engine integration are not yet implemented.

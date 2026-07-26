@@ -45,7 +45,8 @@ Responsibilities:
 - Render chat and settings.
 - Send user messages and image attachments.
 - Record microphone input.
-- Request synthesized speech and play returned WAV data with the Web Audio API.
+- Render model text as it streams.
+- Request synthesized speech and schedule returned PCM chunks with the Web Audio API.
 - Export the current chat.
 
 The browser does not own canonical conversation history and should not need to know how to reach individual internal services.
@@ -82,13 +83,13 @@ Lisa's identity does not belong to OpenRouter, a model slug, a voice file, or a 
 
 ### Conversational provider
 
-Current provider: OpenRouter chat completions
+Current provider: OpenRouter chat completions with streaming enabled in the browser path
 
 Endpoint: `https://openrouter.ai/api/v1/chat/completions`
 
 Local settings live in gitignored `config/openrouter.json`. The selected model and API key are loaded for each call, so changing the model does not require restarting the server. The browser can read the selected model and whether a key exists, but the API never returns the saved key.
 
-Provider failures are returned as visible errors. There is no silent fallback provider.
+Provider text is streamed through the Lisa server as newline-delimited events. Events contain display deltas, complete speakable text chunks, or final request metadata. Provider failures are returned as visible errors. There is no silent fallback provider.
 
 ### Message construction
 
@@ -147,14 +148,19 @@ The browser sends recorded audio directly to the configured ASR sidecar. The sid
 - Source: `mlx-audio-service/`
 - Address: `http://127.0.0.1:8000`
 - Health route: `GET /health`
-- Synthesis route: `POST /v1/audio/speech`
+- Streaming synthesis route: `POST /v1/audio/speech/stream`
+- Compatibility WAV route: `POST /v1/audio/speech`
+- Current engine: `qwen3`
+- Current model: `mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit`
 - Current voice selection: `rose`
 
 The Node server sends JSON shaped as:
 
-`{"input":"Text to speak","voice":"rose"}`
+`{"input":"Text to speak","voice":"rose","engine":"qwen3","model":"mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit","language":"auto","streaming_interval":0.32}`
 
-The service returns WAV bytes. Node forwards those bytes through the same-origin `POST /api/voice/tts` route, and the browser decodes and plays them.
+The streaming route returns mono 32-bit little-endian PCM with its sample rate in a response header. Node forwards the stream through the same-origin `POST /api/voice/tts` route. The browser schedules each received chunk in order rather than waiting for a complete WAV.
+
+`mlx-audio-service/engines.py` is the model boundary. Qwen3 is selected in `config/voice.json`; OmniVoice remains available by changing the engine and model configuration. Qwen generation uses MLX Audio's native streaming mode. Its encoded Rose reference is cached inside the loaded model after first use.
 
 Rose is deployment configuration. Neither Rose nor MLX Audio is a permanent identity dependency.
 
@@ -200,12 +206,11 @@ These are source-backed limitations in the current working tree, not an approved
 
 - Conversation state is one unbounded, process-global, in-memory history shared by all clients and lost on restart.
 - Chat export includes the system persona, cannot be imported, and does not retain attached image data.
-- OpenRouter is the only chat provider; requests are non-streaming and lack timeout, cancellation, and model-capability validation.
+- OpenRouter is the only chat provider; the browser path streams, but requests still lack timeout, cancellation, and model-capability validation.
 - Knowledge retrieval is first-match keyword substring routing rather than a wiki, index, or durable memory system.
 - Images are visible only in the current request. Image commands write prompts but do not call the separate image-generation engine.
 - The browser calls ASR directly over a loopback URL even though the intended boundary is one browser-to-Lisa-server gateway.
-- ASR, TTS, voice selection, and voice creation do not yet have engine-neutral interfaces.
-- Voice configuration contains fields that are ignored or overridden by browser and server code.
+- ASR and voice creation do not yet have engine-neutral runtime interfaces. TTS has a replaceable local engine adapter, while voice portability and enumeration remain incomplete.
 - Bot-only and full-runtime lifecycle commands overlap and use different PID and log locations.
 - Some user-facing copy still says “Standalone Bot” or “AI.”
 
@@ -219,9 +224,9 @@ The intended voice boundary consists of three related but separate capabilities:
 2. Selection of an existing voice.
 3. Creation or cloning of a voice.
 
-The current working tree implements speech synthesis and voice selection through MLX Audio. Voice creation currently exists as a local MLX Audio GUI workflow, not as a stable engine-neutral runtime contract.
+The current working tree implements streaming speech synthesis and voice selection through a replaceable MLX Audio engine adapter. Qwen3-TTS 0.6B Base 8-bit is the configured engine for Rose cloning and native audio streaming. OmniVoice remains selectable but emits complete utterances because its installed MLX implementation is not natively streaming.
 
-Future voice-cloning implementations may use OmniVoice- or Qwen-family models. No specific model, request schema, storage format, or migration design has been approved.
+Voice creation currently exists as a local MLX Audio GUI workflow, not as a stable engine-neutral runtime contract. Voice enumeration, portable metadata, and a model-independent creation API remain unresolved.
 
 ### Grounded internet access
 
