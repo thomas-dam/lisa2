@@ -4,6 +4,11 @@ outputs/
 config/openrouter.json
 config/openrouter.json.tmp
 voice-sidecar/.venv/
+mlx-audio-service/.venv/
+mlx-audio-service/outputs/
+mlx-audio-service/*.egg-info/
+mlx-audio-service/voices/*
+!mlx-audio-service/voices/.gitkeep
 voice-sidecar/__pycache__/
 .DS_Store
 __pycache__/

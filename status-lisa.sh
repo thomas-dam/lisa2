@@ -6,6 +6,7 @@ LOGS="$ROOT/.runtime/logs"
 PIDS="$ROOT/.runtime/pids"
 BOT_PID="$PIDS/bot.pid"
 VOICE_PID="$PIDS/voice.pid"
+TTS_PID="$PIDS/tts.pid"
 BOT_HOST="http://127.0.0.1:3320"
 
 echo "=== Lisa Status ==="
@@ -76,6 +77,40 @@ if [ "$VOICE_RUNNING" = true ]; then
   fi
 fi
 
+# --- MLX Audio TTS ---
+echo ""
+echo "[MLX Audio TTS]"
+TTS_RUNNING=false
+TTS_MANAGED=false
+if [ -f "$TTS_PID" ]; then
+  TPID=$(cat "$TTS_PID" 2>/dev/null || true)
+  if [ -n "$TPID" ] && kill -0 "$TPID" 2>/dev/null; then
+    echo "  Status:  ✓ Running (PID $TPID, managed)"
+    TTS_RUNNING=true
+    TTS_MANAGED=true
+  else
+    echo "  Status:  ✗ PID file exists but process is dead (stale)"
+    rm -f "$TTS_PID"
+  fi
+fi
+if [ "$TTS_RUNNING" = false ]; then
+  TPORT_PID=$(lsof -ti :8000 2>/dev/null | head -n 1 || true)
+  if [ -n "$TPORT_PID" ]; then
+    CMD=$(ps -p "$TPORT_PID" -o comm= 2>/dev/null || echo "?")
+    echo "  Status:  ⚠ UNMANAGED PROCESS (PID $TPORT_PID, $CMD) — restart with ./start-lisa.sh"
+    TTS_RUNNING=true
+  else
+    echo "  Status:  ✗ Not running"
+  fi
+fi
+if [ "$TTS_RUNNING" = true ]; then
+  if curl -sf http://127.0.0.1:8000/health > /dev/null 2>&1; then
+    echo "  API:     ✓ Responding on http://127.0.0.1:8000"
+  else
+    echo "  API:     ✗ Not responding"
+  fi
+fi
+
 # --- Log Files ---
 echo ""
 echo "[Log Files]"
@@ -90,12 +125,13 @@ if [ -d "$LOGS" ]; then
       managed=""
       if [ "$name" = "bot.log" ] && [ "$BOT_MANAGED" = true ]; then managed=" (managed)"; fi
       if [ "$name" = "voice.log" ] && [ "$VOICE_MANAGED" = true ]; then managed=" (managed)"; fi
+      if [ "$name" = "tts.log" ] && [ "$TTS_MANAGED" = true ]; then managed=" (managed)"; fi
       echo "  $name  ($lines lines, $size, last: $modified)$managed"
       found=true
     fi
   done
   if [ "$found" = false ]; then
-    if [ "$BOT_RUNNING" = true ] || [ "$VOICE_RUNNING" = true ]; then
+    if [ "$BOT_RUNNING" = true ] || [ "$VOICE_RUNNING" = true ] || [ "$TTS_RUNNING" = true ]; then
       echo "  (no log files — services are running but were started outside these scripts)"
       echo "  Use ./start-lisa.sh for managed startup with logs"
     else

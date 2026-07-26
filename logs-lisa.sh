@@ -18,12 +18,14 @@ done
 # Check if services are running even without logs
 BOT_RUNNING=false
 VOICE_RUNNING=false
+TTS_RUNNING=false
 lsof -ti :3320 > /dev/null 2>&1 && BOT_RUNNING=true || true
 lsof -ti :3330 > /dev/null 2>&1 && VOICE_RUNNING=true || true
+lsof -ti :8000 > /dev/null 2>&1 && TTS_RUNNING=true || true
 
 if [ ${#LOG_FILES[@]} -eq 0 ]; then
   echo "[logs-lisa] No log files found in $LOGS/"
-  if [ "$BOT_RUNNING" = true ] || [ "$VOICE_RUNNING" = true ]; then
+  if [ "$BOT_RUNNING" = true ] || [ "$VOICE_RUNNING" = true ] || [ "$TTS_RUNNING" = true ]; then
     echo "[logs-lisa] ⚠ Services are running but NOT managed by these scripts."
     echo "[logs-lisa]    Run ./status-lisa.sh for process details."
     echo "[logs-lisa]    To fix: ./stop-lisa.sh && ./start-lisa.sh"

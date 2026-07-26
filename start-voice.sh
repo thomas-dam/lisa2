@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Internal: starts only the voice sidecar.
+# Internal: starts only the local sidecar used for ASR.
+# The repository-owned TTS service is intentionally not started by this ASR-only helper.
 # Normally use ./start-lisa.sh from repo root (starts all services).
 set -euo pipefail
 
@@ -9,7 +10,8 @@ PIDS="$ROOT/.runtime/pids"
 VOICE_LOG="$LOGS/voice.log"
 VOICE_PID="$PIDS/voice.pid"
 
-echo "[start-voice.sh] This script is for internal use only."
+echo "[start-voice.sh] This script starts only the local ASR sidecar."
+echo "  TTS and voice cloning live in mlx-audio-service/."
 echo "  Normally use ./start-lisa.sh from repo root."
 echo ""
 
@@ -30,15 +32,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "[VOICE] Checking port 3330..."
+echo "[ASR] Checking port 3330..."
 if lsof -ti :3330 > /dev/null 2>&1; then
-  OLD_PID=$(lsof -ti :3330 2>/dev/null || true)
-  echo "[VOICE] ⚠ Port 3330 is already in use (PID $OLD_PID)."
-  echo "  Run ./stop-lisa.sh first, or kill -9 $OLD_PID"
+  OLD_PID=$(lsof -ti :3330 2>/dev/null | head -n 1 || true)
+  if curl -sf http://127.0.0.1:3330/api/health > /dev/null 2>&1; then
+    echo "$OLD_PID" > "$VOICE_PID"
+    echo "[ASR] ✓ Healthy sidecar already running on http://127.0.0.1:3330 (PID $OLD_PID)"
+    exit 0
+  fi
+  echo "[ASR] ✗ Port 3330 is occupied by PID $OLD_PID, but it is not a healthy Lisa ASR sidecar."
   exit 1
 fi
 
-echo "[VOICE] Starting sidecar..."
+echo "[ASR] Starting local sidecar..."
 cd "$ROOT/voice-sidecar"
 .venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 3330 > "$VOICE_LOG" 2>&1 &
 VPID=$!
@@ -46,12 +52,12 @@ echo "$VPID" > "$VOICE_PID"
 
 for i in $(seq 1 15); do
   if curl -sf http://127.0.0.1:3330/api/health > /dev/null 2>&1; then
-    echo "[VOICE] ✓ Sidecar running on http://127.0.0.1:3330 (PID $VPID)"
-    echo "[VOICE] Log: $VOICE_LOG"
+    echo "[ASR] ✓ Sidecar running on http://127.0.0.1:3330 (PID $VPID)"
+    echo "[ASR] Log: $VOICE_LOG"
     exit 0
   fi
   sleep 1
 done
 
-echo "[VOICE] ✗ Sidecar did not start within 15s. Check $VOICE_LOG"
+echo "[ASR] ✗ Sidecar did not start within 15s. Check $VOICE_LOG"
 exit 1

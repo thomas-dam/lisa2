@@ -30,6 +30,8 @@ let mediaStream = null;
 let audioChunks = [];
 let sidecarUrl = "";
 let voiceEnabled = false;
+let defaultVoice = "";
+let ttsProvider = "";
 let speakResponses = true;
 let audioCtx = null;
 
@@ -548,8 +550,7 @@ async function callTts(text, reqId) {
     // --- Stage 1: Build and send TTS request via same-origin proxy ---
     const ttsBody = JSON.stringify({
       text,
-      voice: "F2",
-      language: "en",
+      voice: defaultVoice,
     });
     console.debug(`[VOICE] TTS request:`, {
       reqId: ttsReqId,
@@ -567,71 +568,37 @@ async function callTts(text, reqId) {
       body: ttsBody,
     });
 
-    // --- Stage 2: Handle TTS response ---
+    // --- Stage 2: Handle the raw WAV response ---
     const ttsStatus = ttsRes.status;
     const ttsStatusText = ttsRes.statusText;
     const ttsHeaders = Object.fromEntries([...ttsRes.headers.entries()]);
-    const ttsBodyText = await ttsRes.text();
     const ttsElapsed = ((performance.now() - ttsStart) / 1000).toFixed(3);
 
-    console.debug(`[VOICE] TTS response:`, {
+    if (!ttsRes.ok) {
+      const errorText = await ttsRes.text();
+      console.warn(`[VOICE] TTS request failed: status=${ttsStatus} body=${errorText.slice(0, 300)} elapsed=${ttsElapsed}s`);
+      return;
+    }
+
+    const wavArrayBuffer = await ttsRes.arrayBuffer();
+    console.debug(`[VOICE] TTS WAV response:`, {
       reqId: ttsReqId,
       status: ttsStatus,
       statusText: ttsStatusText,
       headers: ttsHeaders,
-      bodyPreview: ttsBodyText.slice(0, 300),
-      bodyLength: ttsBodyText.length,
+      bytes: wavArrayBuffer.byteLength,
       elapsedSec: ttsElapsed,
     });
 
-    if (!ttsRes.ok) {
-      console.warn(`[VOICE] TTS request failed: status=${ttsStatus} body=${ttsBodyText.slice(0, 300)} elapsed=${ttsElapsed}s`);
-      return;
-    }
-
-    // --- Stage 3: Parse response and build audio URL ---
-    let ttsData;
-    try {
-      ttsData = JSON.parse(ttsBodyText);
-    } catch (parseErr) {
-      console.error(`[VOICE] TTS response JSON parse error:`, {
-        error: parseErr.message,
-        body: ttsBodyText.slice(0, 300),
-        status: ttsStatus,
-      });
-      return;
-    }
-
-    const audioUrl = ttsData.audio_url || null;
-    console.debug(`[VOICE] TTS parsed:`, {
-      reqId: ttsReqId,
-      audio_url: ttsData.audio_url,
-      fullAudioUrl: audioUrl,
-      voice: ttsData.voice,
-      durationSec: ttsData.audio_duration_sec,
-      generationSec: ttsData.generation_time_sec,
-      elapsedSec: ttsElapsed,
-    });
-
-    if (!audioUrl) {
-      console.error(`[VOICE] TTS response missing audio_url:`, ttsData);
+    if (wavArrayBuffer.byteLength === 0) {
+      console.error(`[VOICE] TTS response contained no audio bytes`);
       return;
     }
 
     debugLog("tts", `${ttsElapsed}s`);
-    debugLog("audio_url", audioUrl);
+    debugLog("audio_url", `inline WAV (${wavArrayBuffer.byteLength} bytes)`);
 
-    // --- Stage 4: Fetch WAV bytes via audio proxy ---
-    console.debug(`[VOICE] Fetching WAV bytes from: ${audioUrl}`);
-    const wavRes = await fetch(audioUrl);
-    if (!wavRes.ok) {
-      console.error(`[VOICE] WAV fetch failed: status=${wavRes.status}`);
-      return;
-    }
-    const wavArrayBuffer = await wavRes.arrayBuffer();
-    console.debug(`[VOICE] WAV fetched: ${wavArrayBuffer.byteLength} bytes`);
-
-    // --- Stage 5: Decode and play via AudioContext ---
+    // --- Stage 3: Decode and play via AudioContext ---
     const ctx = ensureAudioCtx();
     if (ctx.state === "suspended") {
       console.warn(`[VOICE] AudioContext is suspended — attempting resume`);
@@ -736,7 +703,9 @@ async function loadVoiceConfig() {
     const cfg = await res.json();
     voiceEnabled = cfg.voice_enabled === true;
     sidecarUrl = cfg.sidecar_url || "";
-    console.debug(`[VOICE] config loaded: enabled=${voiceEnabled} sidecar=${sidecarUrl}`);
+    defaultVoice = cfg.default_voice || "";
+    ttsProvider = cfg.tts_provider || "";
+    console.debug(`[VOICE] config loaded: enabled=${voiceEnabled} sidecar=${sidecarUrl} tts=${ttsProvider} voice=${defaultVoice}`);
     if (voiceEnabled && sidecarUrl) {
       micButton.hidden = false;
       voiceToggleRow.hidden = false;

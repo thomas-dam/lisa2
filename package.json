@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "npm --prefix standalone-bot start",
-    "voice": "echo '[npm run voice] Use ./start-lisa.sh from repo root instead.' && bash start-voice.sh",
+    "voice": "echo '[npm run voice] Starts local ASR only; use ./start-lisa.sh for the complete runtime.' && bash start-voice.sh",
     "lisa:start": "bash start-lisa.sh",
     "lisa:stop": "bash stop-lisa.sh",
     "lisa:status": "bash status-lisa.sh",

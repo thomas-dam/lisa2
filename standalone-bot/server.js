@@ -276,10 +276,12 @@ async function handleNewChat(req, res) {
 function handleVoiceConfig(req, res) {
   const sidecarPort = voiceConfig.sidecar?.port || 3330;
   const sidecarUrl = `http://127.0.0.1:${sidecarPort}`;
+  const tts = voiceConfig.tts || {};
   sendJson(res, 200, {
     voice_enabled: voiceConfig.voice_enabled === true,
     sidecar_url: sidecarUrl,
-    default_voice: (voiceConfig.tts || {}).voice || "F2",
+    default_voice: tts.voice || "rose",
+    tts_provider: "mlx-audio",
   });
 }
 
@@ -287,84 +289,47 @@ async function handleVoiceTtsProxy(req, res) {
   try {
     const body = await readRequestJson(req);
     const text = body.text || "";
-    const voice = body.voice || voiceConfig.tts?.voice || "F2";
-    const language = body.language || voiceConfig.tts?.language || "en";
 
     if (!text.trim()) {
       sendJson(res, 400, { error: "Text is required." });
       return;
     }
 
-    const sidecarPort = voiceConfig.sidecar?.port || 3330;
-    const upstream = `http://127.0.0.1:${sidecarPort}`;
-    console.log(`[VOICE-PROXY] upstream=${upstream}/api/tts`);
+    const tts = voiceConfig.tts || {};
+    const endpoint = String(tts.endpoint || "").trim();
+    const voice = body.voice || tts.voice || "rose";
+    if (!endpoint) {
+      sendJson(res, 500, { error: "MLX Audio TTS endpoint is not configured." });
+      return;
+    }
 
-    const params = new URLSearchParams();
-    params.append("text", text);
-    params.append("voice", voice);
-    params.append("language", language);
-
-    const ttsRes = await fetch(`${upstream}/api/tts`, {
+    console.log(`[VOICE-PROXY] mlx-audio upstream=${endpoint} voice=${voice}`);
+    const ttsRes = await fetch(endpoint, {
       method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: params,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input: text, voice }),
     });
+    const audioBuffer = await ttsRes.arrayBuffer();
 
-    const ttsBody = await ttsRes.text();
-    const statusCode = ttsRes.ok ? 200 : ttsRes.status;
-
-    // Rewrite audio_url to point to our proxy
-    let responseBody;
-    try {
-      responseBody = JSON.parse(ttsBody);
-      if (responseBody.audio_url) {
-        responseBody.audio_url = `/api/voice/audio/${responseBody.audio_url.split("/").pop()}`;
-      }
-    } catch {
-      responseBody = { error: "TTS proxy: failed to parse sidecar response", detail: ttsBody.slice(0, 500) };
-    }
-
-    const bodyStr = JSON.stringify(responseBody);
-    res.writeHead(statusCode, {
-      "content-type": "application/json; charset=utf-8",
-      "content-length": Buffer.byteLength(bodyStr),
-    });
-    res.end(bodyStr);
-  } catch (error) {
-    sendJson(res, 502, { error: "Voice sidecar unreachable.", detail: error.message });
-  }
-}
-
-async function handleVoiceAudioProxy(req, res) {
-  try {
-    const filename = req.url.split("/").pop();
-    if (!filename || !/^tts_\d+_[FJM][12]\.wav$/.test(filename)) {
-      res.writeHead(400);
-      res.end("Invalid audio filename");
+    if (!ttsRes.ok) {
+      const detail = Buffer.from(audioBuffer).toString("utf8").slice(0, 500);
+      sendJson(res, ttsRes.status, { error: "MLX Audio TTS request failed.", detail });
       return;
     }
 
-    const sidecarPort = voiceConfig.sidecar?.port || 3330;
-    const upstream = `http://127.0.0.1:${sidecarPort}`;
-    console.log(`[VOICE-PROXY] upstream=${upstream}/api/audio/${filename}`);
-
-    const audioRes = await fetch(`${upstream}/api/audio/${filename}`);
-    if (!audioRes.ok) {
-      res.writeHead(audioRes.status);
-      res.end("Audio not found");
+    if (audioBuffer.byteLength === 0) {
+      sendJson(res, 502, { error: "MLX Audio TTS returned empty audio." });
       return;
     }
 
-    const audioBuffer = await audioRes.arrayBuffer();
     res.writeHead(200, {
       "content-type": "audio/wav",
       "content-length": audioBuffer.byteLength,
-      "cache-control": "public, max-age=3600",
+      "cache-control": "no-store",
     });
     res.end(Buffer.from(audioBuffer));
   } catch (error) {
-    res.writeHead(502);
-    res.end("Voice sidecar unreachable");
+    sendJson(res, 502, { error: "MLX Audio TTS unreachable.", detail: error.message });
   }
 }
 
@@ -454,11 +419,6 @@ const server = createServer((req, res) => {
 
   if (req.method === "POST" && req.url === "/api/voice/tts") {
     void handleVoiceTtsProxy(req, res);
-    return;
-  }
-
-  if (req.method === "GET" && req.url.startsWith("/api/voice/audio/")) {
-    void handleVoiceAudioProxy(req, res);
     return;
   }
 
